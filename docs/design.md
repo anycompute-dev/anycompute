@@ -52,18 +52,25 @@ v0.1 is one Python implementation plus a CLI. The existing switching libraries a
   - the Modal App named `anycompute` in the user's workspace;
   - the commands it runs in the sandbox (`mkdir -p /tmp/anycompute` plus the parent folders of nested `files=` and `Sandbox.write` paths, and the runtime detection commands when runtime is detected);
   - the command `verify --lifecycle` runs;
-  - each adapter's own sandbox commands and resources (for example the docker image pull and its `sleep <ttl>` entrypoint, and the boat.dev detached-command wrapper and its poll commands), which each adapter spec lists.
+  - each adapter's own sandbox commands and resources (for example the docker image pull and its `sleep <ttl>` entrypoint), which each adapter spec lists.
 
 ### Redaction
 
 - Error messages, the JSON output, `verify` reports and the public report replace the value of every provider key (from an environment variable or a provider config file such as Modal's profile) with `***`.
-- The values in `provider_options[*]["environment"]` are redacted the same way, because users pass sandbox secrets there.
+- The engine also redacts the values in `provider_options[*]["environment"]`, because users pass sandbox secrets there. The short-value rule below differs for them.
 - The engine finds the key values from each adapter's `key_sources` cap.
-- Empty values are skipped. A value shorter than 8 characters is replaced only where it appears as a whole token (bounded on each side by the start or end of the text or by a character outside `[A-Za-z0-9_-]`), so short values do not damage unrelated text.
+- The engine redacts each string field (messages, stdout, stderr, report text) before serialization, never the serialized JSON, so the output stays valid JSON and the engine still finds an escaped secret.
+- The engine skips an empty value, and a `provider_options` environment value shorter than 8 characters.
+- The engine redacts a provider key of any length. It replaces a key shorter than 8 characters only where it appears as a whole token, so short values do not damage unrelated text. A whole token has the start or end of the text, or a character outside `[A-Za-z0-9_-]`, on each side.
+
+Tests:
+
+- Redactor table tests check that the engine skips an empty value and an environment value under 8 characters. They also check that it redacts a provider key of any length inside string fields, and a secret with an escaped quote. They also check that a provider key under 8 characters is replaced where it stands as a whole token and is left alone inside a longer word (such as `ab12` in `ab12cd`).
+- A JSON-validity test checks that the `--json` output stays valid JSON with a planted key and a short environment value such as `1` or `true`.
 
 ### Debug logger
 
-The standard Python logger `anycompute` writes one DEBUG line per step (validate, pace wait, create, exec start and end, delete, confirm, cleanup error) with the run ID, sandbox ID, provider and duration, through the same redaction. It is silent by default, `--verbose` prints it to stderr, and it sends nothing anywhere. A unit test plants a key in a logged error and checks each LogRecord's message, args and exc_info, not only the formatted text. A CLI test checks that a run with no flag writes no logger line to stderr, and that `--verbose` writes the DEBUG lines there.
+The standard Python logger `anycompute` writes one DEBUG line per step (validate, pace wait, create, exec start and end, delete, confirm, cleanup error, abandoned call) with the run ID, sandbox ID, provider and duration, through the same redaction. It is silent by default, `--verbose` prints it to stderr, and it sends nothing anywhere. A unit test plants a key in a logged error and checks each LogRecord's message, args and exc_info, not only the formatted text. A CLI test checks that a run with no flag writes no logger line to stderr, and that `--verbose` writes the DEBUG lines there.
 
 ### Scope of v0.1
 
@@ -79,7 +86,8 @@ The standard Python logger `anycompute` writes one DEBUG line per step (validate
 - It publishes results by provider name.
 - If a provider objects, the project stops its runs on that provider, removes that provider's published results, and marks its adapter "not run live".
 - These rules cover the project's own runs: CI (the only place live runs on the project's accounts happen; see Run limit) and the public report. A user's runs on the user's own account are the user's business.
-- An adapter that does not run live is tested only against fixture responses built from the provider's published API reference, OpenAPI file, or SDK source and its own test fixtures. The project captures no fixture from live calls on its own accounts for it. A contributor's recording from the contributor's own account is accepted when the pull request says so. The capability table and the README label such an adapter "not run live". When an adapter runs live, the project re-records its fixtures from live runs.
+- Every adapter's fixtures, live or not, come from the provider's published API reference, OpenAPI file, or SDK source and its own test fixtures. The project captures no fixture from live calls on its own accounts. A contributor's recording from the contributor's own account is accepted when the pull request says so. The capability table and the README label an adapter that does not run live "not run live".
+- A fixture key-scan unit test fails on any fixture with an `Authorization`, `X-API-Key` or cookie header, a key-like field, or a known key prefix.
 - docker needs no provider account. It costs $0 and is exempt from the spend runner's run limit.
 
 ### Never test or probe a provider's systems
@@ -89,11 +97,31 @@ The conformance suite uses only ordinary public API calls (create, exec, files, 
 ### Spend rules for the conformance runner
 
 - **Monthly budget:** $50 per provider per month on the project's accounts. CI keeps no spend record, so the per-run budget, the run limit and the cleanup-failure stop below keep this budget. It is a hard cap only where the provider has its own spend limit.
-- **Worst-case reservation:** the suite drives the CLI as a subprocess, so before each CLI launch the conformance runner (`tests/conformance/runner.py`) reserves the worst-case cost of every sandbox that launch can create (one per provider for `run` and `verify`, plus one per provider for the `verify --lifecycle` child): the `effective_ttl` plus the maximum grace period, at the provider's price for the default size, plus any start fee, from `tests/conformance/prices.toml`. On partial-lifetime adapters (boat.dev, Daytona) the reservation also adds one week of the provider's stopped-storage price per sandbox.
+- **Worst-case reservation:** the suite drives the CLI as a subprocess, so before each CLI launch the conformance runner (`tests/conformance/runner.py`) reserves the worst-case cost of every sandbox that launch can create (one per provider for `run` and `verify`, plus one per provider for the `verify --lifecycle` child): the `effective_ttl` plus the maximum grace period, at the provider's price for the default size, plus any start fee, from `tests/conformance/prices.toml`. On partial-lifetime adapters (boat.dev, Daytona) the reservation also adds one week of the provider's stopped-storage price per sandbox. On an adapter whose `create_retry` cap is `partial` (Modal), it reserves two sandboxes per create.
+- **Duplicate check:** after each launch the runner lists the run's sandboxes (the run ID and its `-lc` and `-kc` child run IDs) by label. If it finds more than it reserved, it stops the run, runs gc for those run IDs, and fails the workflow. A runner unit test uses a fake that creates a duplicate.
 - **Per-run budget:** the runner refuses a launch that would pass a budget of $2 per adapter per run, and the refusal fails the workflow with the adapter and the amount named.
-- **Run limit:** the workflow allows the weekly run plus at most 4 manual dispatches a month per adapter, so at most 9 runs: $18 per adapter a month, or $38 for boat.dev with its $20 plan, under the $50 budget. GitHub's run history is the count: `conformance.yml` puts its `adapters` input in its `run-name`, because the runs API does not return dispatch inputs. Before any create, its first step lists this calendar month's (UTC) runs of `conformance.yml` through the GitHub Actions API and counts, per named adapter, each `workflow_dispatch` run whose `display_title` names it, plus each re-run attempt (`run_attempt` above 1) of any run, weekly or manual, that names it. It fails the whole run when any named adapter already has 4. Live runs of an adapter or of `verify` on the project's accounts go only through `conformance.yml`: the weekly run, or a manual dispatch that names the adapters as inputs (Next Steps 5 to 8, and any later ad hoc live run). They never run from a local machine, so each one is counted. docker is exempt.
-- **Run size:** the scheduled suite runs once a week. One run creates at most 15 sandboxes per adapter with a TTL of at most 120 seconds, so its worst case per adapter is 15 x (120 + 120) seconds = 1 sandbox-hour. That is about $0.20 at small-size prices (checked 2026-11-23), plus boat.dev's start fees and, on boat.dev and Daytona, one week of stopped storage per sandbox. The $0.20 excludes Modal until Next Step 1 records its price.
-- **Stop on cleanup failure:** a failed delete keeps billing past the reservation. So the runner stops launching in a run after the first launch whose `--json` output reports a failed cleanup (an `error` of type `CleanupError` or a non-null `cleanup_error`, at the top level or in any `verify` row), runs gc for that run, and fails the workflow. It reads the JSON, not the exit code, because exit codes can collide (see Exit codes).
+- **Run limit:** the workflow allows the weekly run plus at most 4 other runs (manual dispatches and re-run attempts) a month per adapter. So an adapter gets at most 9 runs a month: $18, or $38 for boat.dev with its $20 plan, under the $50 budget. GitHub's run history is the count, because the runs API does not return dispatch inputs:
+  - A dispatch's `run-name` carries a fixed `adapters=<list>` token from its `adapters` input, and the runs API returns it as `display_title`. The count splits the token in `display_title` on commas and matches each name exactly.
+  - A scheduled (weekly) run has no inputs. It counts against every adapter other than docker whose `live_run` cap is true, and the weekly job runs that same set, read from the caps. docker runs live in the `ci.yml` docker job instead.
+  - A keyless gate job runs first, with no environment and only `actions: read` permission. It lists this calendar month's (UTC) runs of `conformance.yml` through the GitHub Actions API. Per named adapter it counts each `workflow_dispatch` run that names it, plus `run_attempt - 1` re-runs of each run, weekly or manual, that counts against it. The count includes the current run and attempt, and the gate fails the whole run when any named adapter's count is above 4.
+  - The gate refuses a re-run (`run_attempt` above 1) of a run created in an earlier UTC month.
+  - The gate fails closed on a non-2xx response, a body with no `workflow_runs` list, fewer runs read than `total_count`, a parse error, or a missing or null `display_title`, `event` or `run_attempt`. The published schema marks `run_attempt` as optional. It never counts an unread value as zero.
+  - The gate outputs the `run_attempt` that it counted. Every test job `needs:` the gate, and only the test jobs enter the protected environment. Each test job stops before any provider call unless `github.run_attempt` equals the gate's output. So a re-run of only the failed jobs stops at that check, and a full re-run goes through the gate, which counts it.
+  - The protected environment allows deployments only from main (a deployment branch rule).
+  - Live runs of an adapter or of `verify` on the project's accounts go only through `conformance.yml`: the weekly run, or a manual dispatch that names the adapters as inputs (Next Steps 5 to 8, and any later ad hoc live run). They never run from a local machine, so each one is counted. docker is exempt.
+
+  Tests (spend-runner unit tests, with recorded GitHub API responses):
+
+  - 3 earlier dispatches plus the current one pass, and the gate refuses a fifth.
+  - A run at `run_attempt` 3 counts 2.
+  - A weekly re-run counts for each live adapter other than docker, and the weekly job and the count read the same set from the caps.
+  - The gate refuses a re-run of a previous month's run.
+  - A 403, a missing `workflow_runs` list, fewer runs than `total_count`, a parse error, and a missing or null `display_title`, `event` or `run_attempt` each fail closed, with one test per case.
+  - A unit test reads `conformance.yml` and checks the gate's permissions, each test job's `needs:` and its attempt check.
+- **Run size:** the scheduled suite runs once a week. One run creates at most 15 sandboxes per adapter with a TTL of at most 120 seconds, so its worst case per adapter is 15 x (120 + 120) seconds = 1 sandbox-hour. That is about $0.20 at small-size prices (checked 2026-11-23), plus boat.dev's start fees and, on boat.dev and Daytona, one week of stopped storage per sandbox. The $0.20 excludes Modal until Next Step 1 records its price. On Modal the reservation is 2 sandbox-hours, because it counts two sandboxes per create.
+- **Stop on cleanup failure:** a failed delete keeps billing past the reservation. So after the first launch whose `--json` output reports a failed cleanup, the runner stops launching in that run. A failed cleanup is an `error` of type `CleanupError` or a non-null `cleanup_error`, at the top level or in any `verify` row. The runner then runs gc for the run ID and its `-lc` and `-kc` child run IDs, and fails the workflow. It reads the JSON, not the exit code, because exit codes can collide (see Exit codes). Output that is not one JSON document, or a CLI crash, counts as a failed cleanup. Runner unit tests: a non-null `cleanup_error` in one `verify` row stops launches; a command's own exit 125 with a null `error` does not; non-JSON output and a CLI crash fail closed.
+- **Sweep earlier leftovers:** before its first create, each keyed job runs `gc --all --provider <adapter>` for the project's labeled sandboxes. If gc reports any failed delete, the job creates nothing and fails.
+- **Job timeout:** the test step has its own `timeout-minutes`, inside the job limit. An `if: always()` step after it runs gc on each adapter for the workflow's run ID and its `-lc` and `-kc` child run IDs.
 - **Free credits first:** E2B one-time credit, Modal $30 a month, Daytona $200 with no card (checked 2026-11-23). Use a hard limit or prepaid wallet where the provider has one, and clean up by run ID after every run.
 - **boat.dev** costs at least $20 a month and joins CI only when its adapter starts.
 - **Prices with a source:** Next Step 1 records each provider's prices in `tests/conformance/prices.toml`, each with a source. No Modal price is recorded yet.
@@ -106,37 +134,63 @@ Trusted publishing from CI and signed releases from the first release, because u
 
 ### One engine
 
-- Every contract rule that the Python API enforces lives once, in the engine behind `run()` and `Sandbox` (`__init__.py`). The engine also holds the gc selection rules, the verify checks and redaction.
-- `contract.py` defines the types the engine uses (Result, the errors, the Provider protocol and caps) and builds the capability table from the caps.
-- Adapters translate calls, which includes quoting an argument list for a shell-string API and turning off SDK retries. They hold no policy.
-- `cli.py` parses flags, reads `--file` paths and `task.toml` input files from local disk into the `files=` dict (with the missing-file and base-name-clash checks), prints the run ID to stderr, and formats output. These CLI behaviors are its only rules.
+- Every contract rule that the Python API enforces lives once, in the engine (`engine.py`) behind `run()` and `Sandbox`. The engine also holds the gc selection rules, redaction, the clock and the waited-call helper.
+- `verify.py` holds the verify checks and report. `lifecycle.py` holds the kill-client flow that `verify --lifecycle` and the conformance harness share.
+- `contract.py` holds only types (Result, ExecResult, SandboxState, the errors, the Provider protocol and caps). It imports no other anycompute module.
+- `providers/__init__.py` holds the provider registry (one `PROVIDERS` tuple) and builds the capability table from the caps.
+- `__init__.py` only re-exports. Its `__all__` lists the public API: `run`, `Sandbox`, `Result`, `ExecResult` and the 10 error classes. Helpers inside modules have a leading underscore, and the README says that the project supports only the names in `__all__`.
+- Adapters translate calls, which includes quoting an argument list for a shell-string API and turning off SDK retries. They hold no policy, no poll loop, no timer and no retry decision.
+- `cli.py` parses flags and raises `ConfigError` on a usage error. It reads `--file` paths and `task.toml` input files from local disk into the `files=` dict (with the missing-file and base-name-clash checks). It checks the output folder, prints the run ID to stderr, formats output, and holds the top-level handler (a redacted `ProviderError` with `internal` true; see Exit codes). These CLI behaviors are its only rules.
 
-Each adapter translates about ten calls: create with TTL and labels, exec, write, read, delete, state, list, error mapping, and `api_host()` for the runtime record. It declares these caps:
+Tests:
+
+- A test pins `anycompute.__all__`.
+- Importing `anycompute.contract` does not import the engine.
+- A drift test checks that the `PROVIDERS` tuple matches the extras, the `all` extra, `providers/*.py` other than `__init__.py`, the README table and the harness pace.
+
+Each adapter translates about ten calls: `prepare` before create (docker's image pull; no call on other adapters), create with TTL and labels, exec, write, read, delete, state, list, error mapping, and `api_host()` for the runtime record.
+
+- `state` returns a `SandboxState`: `running`, `stopped`, `gone` or `unknown`. Each adapter maps its native states (including deleting and paused states) to these four values. The engine never treats `unknown` as `gone`. Test: one recorded native-state table test per adapter.
+- `list` reads every page within one 120-second budget. It filters by label on the server where the provider supports it, else in the adapter before it returns. Tests: a recorded two-page test per paged adapter, and an engine test where `gc --run` deletes a sandbox on page 2 of a fake list.
+
+Each adapter declares these caps:
 
 | Cap | Type and values | What it declares |
 |---|---|---|
 | `ttl_unit_s`, `ttl_max_s` | int; int or None (no maximum) | The provider's lifetime granularity and limit, in seconds |
 | `labels_at_create` | bool | Whether labels go in the create request |
-| `lifetime` | `"hard"` or `"partial"` | `hard` when the provider ends the sandbox at its TTL; `partial` when it only stops it (boat.dev) or the suite has not shown that its timer is a deadline (Daytona; see Declared gaps) |
+| `lifetime` | `"hard"` or `"partial"` | `hard` when the provider ends the sandbox at its TTL; `partial` when it only stops it (boat.dev), or until the suite shows a delete at the TTL (Daytona; see Declared gaps) |
 | `pre_start_window` | `"none"` or `"partial"` | An untimed window before the lifetime starts |
-| `idle_timer` | bool | True when the provider ends or stops the sandbox only after idle time, not at its TTL |
 | `create_retry`, `exec_retry` | `"off"` or `"partial"` | `off` when the adapter turns off every SDK and transport retry for that call (rule 10); `partial` when it cannot |
 | `creates_per_minute` | a number with its source URL and checked date, or None | Its documented creates per minute |
 | `provider_options_allowlist` | set of key names | The `provider_options` keys it accepts |
-| `per_call_timeout` | bool | Whether its SDK has a per-call timeout |
 | `sdk_package` | str | Its SDK package name, for the report's `provider_sdk_version` |
 | `list_create_time` | bool | Whether its list shows a create time |
 | `isolation` | str | Its isolation level from the provider's docs, for example a microVM, a VM, or a container on the host kernel |
 | `key_sources` | environment variable names and config-file fields | Where its keys live, for redaction, the missing-key check and `anycompute providers` (empty for docker) |
-| `live_run` | bool | False marks the adapter "not run live" (see Live runs) |
+| `live_run` | bool | False marks the adapter "not run live" (see Live runs); the weekly run tests every adapter other than docker where it is true (see Run limit) |
 
 The capability table is built from those caps. It is never written by hand.
 
-**Fake provider.** `providers/fake.py` is an adapter like the others, with the provider name `fake`, no extra, and the key variable `ANYCOMPUTE_FAKE_KEY`. It keeps its sandboxes in memory, records every call, and takes its caps and scripted behaviours from its constructor: a hang or delay per call, a failed delete, a late create, an exec exit code of 137 or none, injected provider responses (401, 429, quota, other), and a fake clock. A CLI subprocess test selects it with `--provider fake` and scripts it through `ANYCOMPUTE_FAKE_SCRIPT`, the path of a JSON file with the same settings. `anycompute providers` and the capability table leave it out.
+**Fake provider.** The fake provider lives in `tests/fakes/`, outside the package. It implements the Provider protocol like an adapter, with the key variable `ANYCOMPUTE_FAKE_KEY`. It keeps its sandboxes in memory, records every call, and takes its caps and scripted behaviours from its constructor:
 
-**Thread safety.** The engine keeps no shared mutable state except the per-process run ID and one locked create pacer per provider. Each `Sandbox` owns its own provider client, or the adapter guards a shared client with a lock, so `run()` and separate `Sandbox` objects are safe to use from many threads.
+- a hang or delay per call;
+- a failed delete;
+- a late create;
+- a duplicate create;
+- an exec exit code of 137 or none;
+- a native-state sequence;
+- a list split over two pages;
+- an exception outside the error mapping (such as a `TypeError`);
+- injected provider responses (401, 429, quota, other).
 
-**Sandbox object.** `Sandbox(provider, ttl=300, provider_options=None, creates_per_minute=None, run_id=None)` creates the sandbox in its constructor, so the TTL counts from there, and `with` is optional. It has `sandbox_id` and `run_id`, `write(path, bytes)`, `exec(argv)` (it returns `ExecResult(stdout, stderr, exit_code)`), `read(path)` (bytes, or None for a missing file), `native` and `close()`. `close()` deletes the sandbox (rule 4); `__exit__` calls it, and a second call does nothing. After `close()` it exposes `sandbox_seconds` and `outside_contract`.
+CLI subprocess tests run a test launcher in `tests/fakes/`. The launcher registers the fake in the provider registry under the name `fake` and reads `ANYCOMPUTE_FAKE_SCRIPT`, the path of a JSON file with the same settings. Then it swaps the engine clock and calls `anycompute.cli.main`. The installed package never contains the fake, so the capability table and `anycompute providers` need no hidden-provider case. The docker conformance suite still proves the installed `anycompute` entry point.
+
+**Clock.** The engine owns one clock object (now, sleep and a timed wait). Every engine timer (budgets, the cleanup deadline, the poll schedule, the pacer, the gc age rule, `sandbox_seconds`) uses it. No engine wait calls `time.sleep` or `Thread.join` with a real timeout directly. Unit tests and the fake launcher swap it for a fake clock.
+
+**Thread safety.** The engine keeps no shared mutable state except the per-process run ID and one locked create pacer per provider. Each `Sandbox` owns its own provider client, or the adapter shares one client that it builds with no lock held. A lock guards only the stored client (the first stored client wins), as with the Modal `app_id`. No adapter holds a lock across a provider call. So `run()` and separate `Sandbox` objects are safe to use from many threads.
+
+**Sandbox object.** `Sandbox(provider, ttl=300, provider_options=None, creates_per_minute=None, run_id=None)` creates the sandbox in its constructor, so the TTL counts from there, and `with` is optional. It has `sandbox_id` and `run_id`, `write(path, bytes)`, `exec(argv)` (it returns `ExecResult(stdout, stderr, exit_code)`), `read(path)` (bytes, or None for a missing file), `native` and `close()`. `close()` deletes the sandbox (rule 4); `__exit__` calls it, and a second call does nothing. After `close()`, `exec`, `write` and `read` raise `ConfigError` with no provider call, and the object exposes `sandbox_seconds` and `outside_contract`. A failure inside the constructor after create still deletes the sandbox (rule 5).
 
 **No async API in v0.1.** A native `arun()` and `AsyncSandbox` are deferred (`TODOS.md`). Async callers wrap `run()` in a thread until then. Streaming reads for large output files are also deferred.
 
@@ -148,7 +202,7 @@ The capability table is built from those caps. It is never written by hand.
 | 2 | No client timers | Client timeouts are always longer than the provider's deadline |
 | 3 | Expiry during a command | A sandbox that ends mid-command raises `SandboxTimeoutError` |
 | 4 | Delete | A real delete, confirmed within 120 s, or `CleanupError` |
-| 5 | Cleanup error | Output is kept and the original exception is never hidden |
+| 5 | Cleanup error | A failure after create still ends in a delete; output is kept and the original exception is never hidden |
 | 6 | Result | One typed Result on every adapter |
 | 7 | Working directory | `/tmp/anycompute`, relative paths only |
 | 8 | Arguments | An argument list, quoted for shell-string APIs |
@@ -164,32 +218,35 @@ What the SDK does:
 
 - `ttl` (seconds) is optional on every create, in `run()`, `Sandbox()`, the CLI `--ttl` flag and `task.toml`. It defaults to 300, and the SDK always sends a provider lifetime.
 - The TTL counts from create.
-- `ttl` is an int. A TTL that is not an int, or is below 1, raises `InvalidTTLError` before create.
+- `ttl` is an int, and a `bool` is not an int here. A TTL that is not an int, or is below 1, raises `InvalidTTLError` before create. A `task.toml` `ttl` of the wrong type (such as `"120"` or `120.0`) also raises `InvalidTTLError`.
 - The engine rounds it up to the provider's granularity from the adapter's caps (for example whole minutes on Daytona) and reports `effective_ttl` in the Result.
 - An `effective_ttl` above the provider's maximum raises `InvalidTTLError` before create. It is never clamped.
 - The `anycompute-ttl` label, every client budget, gc and the spend reservation use `effective_ttl`.
 - The adapter passes the TTL to the provider's own lifetime setting, never to a client timer.
 
-Test: the live test runs `anycompute run --json --ttl 120 -- sleep 600`. The observer checks the sandbox state through the provider's API from outside. It passes only when the provider ends the sandbox (gone or killed, never paused) by the TTL plus the maximum grace period. On a `partial` lifetime, stopped passes.
+Tests:
+
+- The live test runs `anycompute run --json --ttl 120 -- sleep 600`. The observer checks the sandbox state through the provider's API from outside. It passes only when the provider ends the sandbox (gone or killed, never paused) by the TTL plus the maximum grace period. On a `partial` lifetime, stopped passes.
+- A unit test checks that a TTL of 61 on a 60-second unit gives an `effective_ttl` of 120 in the Result, the `anycompute-ttl` label and the create call.
 
 #### 2. No client timers
 
 What the SDK does:
 
 - The engine gives every work call (create, write, exec, read) a client timeout of the remaining TTL plus the maximum grace period, always finite and never off, so no client-side timeout ends a command before the provider's deadline.
-- Where an adapter's caps say `per_call_timeout` is false (Modal's gRPC calls, docker's client with no read timeout), the engine waits on every call of that adapter in a worker thread up to that budget.
-- At that budget the engine treats a work call as a fired client timeout (the state check in rule 3) and leaves the abandoned call to finish in the background.
+- The docker image pull runs before create, so no sandbox exists yet and the TTL does not run yet. The pull gets the TTL plus the maximum grace period as its budget. A pull that reaches it raises `ProviderError` (exit 124) with `sandbox_may_exist` false.
+- Every provider call on every adapter goes through the engine's one waited-call helper, which waits up to the call's budget on the engine clock. An SDK's own timeout may stay as an inner guard only when the adapter sets it to the call's budget or longer, so it never fires before the helper's budget ends. The adapter always sets or turns off each SDK default timeout.
+- At that budget the engine treats a work call as a fired client timeout (the state check in rule 3) and leaves the abandoned call to finish in the background. It logs one DEBUG line for the abandoned call.
 - Each waited call runs in its own daemon thread, never in a `concurrent.futures` executor, because Python joins an executor's workers at exit and a hung call would then hold the process past its budget.
 - A create that reaches its budget is a lost create: `ProviderError` with `sandbox_may_exist` and the copyable gc command (see CLI). If the abandoned create later returns a sandbox ID while the process still runs, the engine deletes it under the cleanup clock and logs it (late-create reconciliation).
 - The same wait applies to delete and confirm calls, with the time left on the 120-second cleanup deadline as the budget. A delete or confirm call that reaches it raises `CleanupError` (rule 4), with no state check.
-- `anycompute gc` has no TTL. Each of its list calls, and each state call it makes to select sandboxes, gets 120 seconds (the cleanup clock's length) through the same wait where the SDK has no per-call timeout. A call that reaches it raises `ProviderError` (exit 124) naming the provider. gc's delete and confirm calls keep the 120-second cleanup deadline.
-- The rule 3 state call (after a fired client timeout, or after an exec exit code of 137 or none) gets its own budget of 120 seconds (the cleanup clock's length) through the same wait where the SDK has no per-call timeout. A state call that reaches it raises `ProviderError` (exit 124), and the delete and its confirm still run.
+- `anycompute gc` has no TTL. Each of its list calls, and each state call it makes to select sandboxes, gets 120 seconds (the cleanup clock's length) through the same wait. A call that reaches it raises `ProviderError` (exit 124) naming the provider. gc's delete and confirm calls keep the 120-second cleanup deadline.
+- The rule 3 state call (after a fired client timeout, or after an exec exit code of 137 or none) gets its own budget of 120 seconds (the cleanup clock's length) through the same wait. A state call that reaches it raises `ProviderError` (exit 124), and the delete and its confirm still run.
 
 Tests:
 
-- The lifetime test uses a TTL longer than every provider SDK's default command timeout (Daytona 10 s, boat.dev 30 s, E2B 60 s).
-- A unit test covers a hung fake exec.
-- A unit test with a fake adapter that has no per-call timeout checks that the worker-thread wait returns at the budget and raises the rule 3 outcome (`ProviderError` while the fake sandbox still runs).
+- The lifetime test uses a TTL longer than every provider SDK's default command timeout (Daytona 10 s, boat.dev 30 s, E2B 60 s, docker 60 s).
+- A unit test with a hung fake exec checks that the waited-call helper returns at the budget on a fake clock. It also checks the rule 3 outcome (`ProviderError` while the fake sandbox still runs) and the DEBUG line for the abandoned call.
 - A CLI test whose fake exec never returns checks that the process exits 124 at the budget.
 - A unit test makes a fake create finish after its timeout and checks that the late sandbox is deleted and logged.
 - A unit test with a hung fake list checks that gc exits 124 at 120 seconds on a fake clock.
@@ -200,8 +257,8 @@ Tests:
 What the SDK does:
 
 - When the provider ends the sandbox at the TTL while a command runs, `run()` and `Sandbox.exec()` raise `SandboxTimeoutError` with the sandbox ID, the run ID, and any partial stdout and stderr that the provider returned.
-- If a client timeout fires anyway, the engine asks the provider for the sandbox state: ended or stopped raises `SandboxTimeoutError`; still running raises `ProviderError`. The delete and its confirm run either way.
-- When an exec returns an exit code that can mean the sandbox ended (137, or none, as docker's exec does when its container stops), the engine also asks the state call. A sandbox that is gone or stopped raises `SandboxTimeoutError`. An exit code of none while the sandbox still runs raises `ProviderError`.
+- If a client timeout fires anyway, the engine asks the provider for the sandbox state: `gone` or `stopped` raises `SandboxTimeoutError`; `running` or `unknown` raises `ProviderError`. The delete and its confirm run either way.
+- When an exec returns an exit code that can mean the sandbox ended (137, or none, as docker's exec does when its container stops), the engine also asks the state call. A sandbox that is gone or stopped raises `SandboxTimeoutError`. An exit code of none while the sandbox still runs raises `ProviderError`. After an exit code of 137 or none, a state of `unknown` raises `ProviderError`, because the engine never treats `unknown` as `gone`. The delete and its confirm still run.
 - Every anycompute error raised after a create carries `sandbox_seconds` (None when no delete confirmed). For an error raised inside a `Sandbox` block, `__exit__` sets it on the error in flight after the delete confirm.
 
 Tests:
@@ -209,28 +266,37 @@ Tests:
 - The live lifetime test checks that `anycompute run --json` reports `SandboxTimeoutError` in its `error` field and exits 123 on every adapter.
 - A unit test with a slow fake exec covers both client-timeout branches.
 - A unit test with a hung fake state call after a fired client timeout raises `ProviderError` at 120 seconds on a fake clock, and the delete and its confirm still run.
-- Recorded-response unit tests cover an exec that returns 137 after its container stopped (`SandboxTimeoutError`), an exit code of none with the container gone (`SandboxTimeoutError`), and an exit code of none while the container still runs (`ProviderError`).
+- Recorded-response unit tests cover an exec that returns 137 after its container stopped (`SandboxTimeoutError`) and an exit code of none with the container gone (`SandboxTimeoutError`). They also cover an exit code of none while the container still runs (`ProviderError`) and an exit code of 137 with state `unknown` (`ProviderError`).
 
 #### 4. Delete
 
 What the SDK does:
 
 - `close()` and the end of `run()` delete the sandbox; they never pause or stop it. They return only after the provider confirms the delete.
-- The delete and every confirm poll share one deadline of 120 seconds from the start of cleanup. Each request gets the time left, and a 429 during the poll backs off and keeps polling.
-- They raise `CleanupError` when that deadline passes or the delete fails, on every adapter.
+- The delete and every confirm poll share one deadline of 120 seconds from the start of cleanup. Each request gets the time left.
+- The engine retries a failed delete or confirm request (for example a 502 or a 429) within that deadline. A not-found answer to the delete counts as a successful delete request on every adapter.
+- Every engine poll (the confirm, the delete retry, and the observer's marker and gone waits) follows one schedule: it sends the first request at once, then waits 1 second and doubles to a 10-second cap. On a 429 it waits `retry_after` when the provider gives one (capped at the time left), else the next step.
+- The engine confirms a delete only when the adapter's state call reports `gone`, never because a list no longer shows the sandbox. On `unknown` the confirm keeps polling.
+- They raise `CleanupError` when that deadline passes, on every adapter.
 - An adapter's delete holds no confirm or poll logic of its own. If it calls an SDK wait (Daytona `wait=True`, Modal `terminate(wait=True)`), that wait gets only the time left on that deadline, and the engine still confirms through the adapter's state call.
 - A failed delete is never silent.
 
 Tests:
 
-- After `anycompute run --json` exits, the observer's list no longer shows the sandbox, or its state call reports it gone.
+- After `anycompute run --json` exits, the observer's state call reports the sandbox gone.
 - A unit test with a hung fake delete raises `CleanupError` at 120 seconds on a fake clock.
 - A unit test whose fake confirm returns 429 once and then gone checks that the engine backs off, keeps polling and returns the Result. A 429 that lasts to the deadline raises `CleanupError`.
+- Unit tests make a fake delete fail once with a 502, and once with a 429, and check a retry within the deadline. A not-found delete counts as a successful delete request.
+- On a fake clock where the delete returns at once, a confirm that never sees `gone` makes exactly 15 state requests in 120 seconds (at 0, 1, 3, 7, 15, 25, ..., 115 s). A 429 with `retry_after` 7 waits 7 seconds.
+- `close()` twice makes one delete call. `exec`, `write` or `read` after `close()` raises `ConfigError` with no provider call.
 
 #### 5. Cleanup error
 
 What the SDK does:
 
+- Any failure after the provider returns a sandbox ID runs the delete and its confirm before the error leaves. This covers the post-create `mkdir`, a write, runtime detection, a read-back, docker's start and an interrupt, in `run()` and in the `Sandbox` constructor. The error carries the `sandbox_id`.
+- An adapter create that made a resource and then failed raises `ProviderError` with the `sandbox_id`, and the engine deletes it. A nonzero exit from the post-create `mkdir` raises `ProviderError`.
+- An interrupt while create is in flight is a lost create: `ProviderError` with `sandbox_may_exist` and the copyable gc command, and the CLI exits 130.
 - `CleanupError` carries the completed `Result` (when the job finished), the sandbox ID and the run ID, so the user keeps the output.
 - In `run()` and in `Sandbox.__exit__`, when an exception is already in flight, the original exception propagates and the cleanup failure is never hidden: the engine sets the `CleanupError` as the original's `cleanup_error` attribute and adds its redacted message with `add_note`, never through `__cause__`.
 - Cleanup also runs when a `KeyboardInterrupt` arrives during a command. After the cleanup, the `KeyboardInterrupt` propagates with the run ID and the sandbox ID attached (and a `cleanup_error` when the delete failed), and the CLI exits 130.
@@ -241,6 +307,8 @@ Tests:
 - A unit test with a fake provider whose delete fails checks both cases (the `cleanup_error` attribute and its note, for `run()` and `Sandbox`), and a `KeyboardInterrupt` during exec.
 - A CLI test checks that one `KeyboardInterrupt` with a confirmed delete exits 130 with an `error` of type `KeyboardInterrupt`, and that a failed delete after it adds the copyable gc command.
 - A second `KeyboardInterrupt` during cleanup makes the CLI print the dry-run gc command and exit 130, and makes the Python API re-raise `KeyboardInterrupt` with the run ID and the sandbox ID.
+- One parametrized unit test fails at each step after create (a nonzero `mkdir`, a write, runtime detection, a read-back, an interrupt), in `run()` and in the `Sandbox` constructor. Each case makes exactly one delete and confirm, and the error carries the `sandbox_id`. A docker unit test makes start fail after create and checks the same.
+- A CLI test interrupts a fake create in flight and checks `ProviderError` with `sandbox_may_exist`, the gc command and exit 130.
 
 #### 6. Result
 
@@ -265,8 +333,8 @@ What the SDK does:
 
 - The engine creates `/tmp/anycompute`, and the parent folders of any nested `files=` path, in the sandbox after create (one `mkdir -p` through the adapter's exec) and passes it as the working directory to every exec. `Sandbox.write` to a nested path first runs one `mkdir -p` for its parent folder.
 - Uploads are written there, and read-back paths resolve from it.
-- A read path that does not exist is left out of `files` and listed in `missing`.
-- A sandbox path (a `files=` key, a read path, or a read-back path in `task.toml`) that is absolute or has a `..` part (after a split on `/`) raises `InvalidPathError` before create. A nested relative path such as `sub/in.txt` is allowed, and a name such as `a..b.txt` is not a `..` part. A `Sandbox.write` or `Sandbox.read` path goes through the same check and raises `InvalidPathError` before the provider call.
+- A read path that does not exist, or is not a regular file (such as a directory), is left out of `files` and listed in `missing`.
+- A sandbox path is a `files=` key, a read path, or a read-back path in `task.toml`. It raises `InvalidPathError` before create when it is absolute, has a `..` part (after a split on `/`), is empty, ends in `/` or holds a NUL byte. So does a `files=` key that is the parent folder of another key. A nested relative path such as `sub/in.txt` is allowed, and a name such as `a..b.txt` is not a `..` part. A `Sandbox.write` or `Sandbox.read` path goes through the same check and raises `InvalidPathError` before the provider call.
 - A CLI `--file` value and a `task.toml` input file are local paths (a `task.toml` input resolves from the folder of `task.toml`). `cli.py` reads them from disk with the same missing-file and base-name-clash checks, and only the base name is used in the sandbox.
 
 Tests:
@@ -274,6 +342,7 @@ Tests:
 - A conformance test uploads a file with `--file`, runs it, reads relative paths back, and reads one missing file, with the same result on every adapter.
 - A CLI unit test covers an upload, a missing local file and a base-name clash.
 - A unit test checks that `sb.write("sub/in.txt", ...)` succeeds and that `sb.write("../x", ...)` raises `InvalidPathError` with no provider call.
+- Unit tests reject an empty path, a trailing slash, a NUL byte and a `files=` key that is the parent of another key before create. They count a directory read path as missing.
 
 #### 8. Arguments
 
@@ -285,9 +354,12 @@ Test: a conformance test passes arguments with spaces, quotes and shell metachar
 
 What the SDK does:
 
-- Every error subclasses `AnycomputeError`. There is one type per cause: `AuthError`, `RateLimitError` (with `retry_after` when the provider sends it), `QuotaError`, `SandboxTimeoutError`, `ProviderError`, `CleanupError`, and three caller-input errors that also subclass `ValueError`: `InvalidTTLError`, `InvalidPathError` and `ConfigError`.
+- Every error subclasses `AnycomputeError`. There is one type per cause: `AuthError`, `RateLimitError` (with `retry_after` when the provider sends it), `QuotaError`, `SandboxTimeoutError`, `ProviderError`, `CleanupError`, and three caller-input errors that also subclass `ValueError`: `InvalidTTLError`, `InvalidPathError` and `ConfigError`. Each error class carries its CLI `exit_code`.
 - `ConfigError` covers:
   - an unknown provider name;
+  - a CLI usage error (an unknown flag, a missing `--provider`, a `--ttl` that is not a number, `gc` with both `--run` and `--all`);
+  - an output folder (`./anycompute-out/` or `--out <dir>`) that is not writable;
+  - a `Sandbox` `exec`, `write` or `read` after `close()`;
   - a missing extra;
   - a `provider_options` entry for an unknown provider;
   - an unlisted `provider_options` key;
@@ -295,20 +367,23 @@ What the SDK does:
   - a pacing rate that is not a positive number;
   - a run ID that does not match `[a-z0-9-]{1,40}`;
   - in a `task.toml` provider table, an `environment` variable that is not set locally, or a literal `environment` value table;
-  - a `task.toml` with an unknown key, a value of the wrong type, or no `command`.
+  - a `task.toml` with an unknown key, a value of the wrong type (a wrong `ttl` type raises `InvalidTTLError`), or no `command`.
 - The `ConfigError` message names the extra, the key or the value. For an `environment` entry it names the key and never the value, because a literal value may be a secret.
 - A key is missing only when none of the adapter's `key_sources` (its environment variables, or the provider's own config file such as Modal's profile) holds it. Then `AuthError` is raised before any provider call. An adapter with an empty `key_sources` (docker) needs no key, so this check does not apply to it.
-- Error attributes: every anycompute error raised after a create has `sandbox_id`, `run_id` and `sandbox_seconds`; `SandboxTimeoutError` also has the partial `stdout` and `stderr`; `CleanupError` has `result` (the completed Result, or None); `RateLimitError` has `retry_after`; `ProviderError` has `sandbox_may_exist`.
+- Error attributes: every anycompute error raised after a create has `sandbox_id`, `run_id` and `sandbox_seconds`; `SandboxTimeoutError` also has the partial `stdout` and `stderr`; `CleanupError` has `result` (the completed Result, or None); `RateLimitError` has `retry_after`; `ProviderError` has `sandbox_may_exist` and `internal`.
+- The waited-call helper wraps an exception that the adapter's error mapping does not cover (for example a `TypeError` in adapter code) in a redacted `ProviderError` with `internal = True`. A mapped provider error has `internal = False`.
 - No error carries a key value. The engine replaces each provider key value with `***` in the provider's error text, keeps that redacted text on its own error, and raises it outside the provider's exception handler, so no raw provider exception stays attached.
 
 Tests:
 
 - Unit tests cover each of the 9 types.
 - Recorded or fake provider responses (401, 429, quota, other) from the provider's own API map to `AuthError`, `RateLimitError`, `QuotaError` and `ProviderError` on every adapter. docker's registry pull limit is `ProviderError` (see the docker adapter).
-- A TTL of 0, a TTL that is not an int, a TTL above the maximum and a TTL that rounds up above the maximum raise `InvalidTTLError`, and an absolute path and a `..` path raise `InvalidPathError`, with no create call. `sub/in.txt` and `a..b.txt` are accepted.
-- An unknown provider, a missing extra, a `provider_options` entry for an unknown provider, an unlisted `provider_options` key, a conflicting `creates_per_minute=`, a pacing rate that is not a positive number, and a `task.toml` with a mistyped key (`exitcode = 1`) each raise `ConfigError`.
+- A TTL of 0, a TTL that is not an int, `ttl=True`, and a `task.toml` `ttl` of `"120"` or `120.0` raise `InvalidTTLError` with no create call. So do a TTL above the maximum (E2B 3601, boat.dev 481) and a TTL that rounds up above the maximum.
+- An absolute path and a `..` path raise `InvalidPathError` with no create call. `sub/in.txt` and `a..b.txt` pass the check.
+- One parametrized test per `ConfigError` bullet above raises `ConfigError` (for `task.toml`, a mistyped key such as `exitcode = 1`, a wrong type and no `command`).
 - A missing key raises `AuthError`, and the fake provider records no call.
 - A unit test plants a fake key, and a fake secret in `provider_options` environment values, in a fake provider error. It checks that both are absent from `str`, `repr`, a formatted traceback, the JSON output and the report, and that `__context__` and `__cause__` are None.
+- A unit test makes a fake call raise `TypeError` and checks a `ProviderError` with `internal` true.
 - No live test provokes a provider failure.
 
 #### 10. Retries
@@ -317,13 +392,13 @@ What the SDK does:
 
 - The SDK never retries a create automatically: a retried create after a lost response would make a second sandbox. It does not retry exec.
 - Each adapter also turns off its provider SDK's own retries and its transport (HTTP or gRPC connection) retries for create and exec through the SDK's client options where the SDK allows it, never by changing the user's environment.
-- An adapter that cannot (Modal today) declares `create_retry: partial` and `exec_retry: partial`. A duplicate it may create carries the same labels and TTL, so the provider ends it and gc finds it.
+- An adapter that cannot (Modal today) declares `create_retry: partial` and `exec_retry: partial`. A duplicate it may create carries the same labels and TTL, so the provider ends it and gc finds it. The spend runner reserves for it and counts it (see Spend rules).
 - The caller handles `RateLimitError` with its `retry_after`.
 
 Tests:
 
 - Unit tests check that a fake 429 on create raises once and makes one create call.
-- Adapter tests for an HTTP-based SDK count requests at the HTTP layer with recorded responses, including a lost response.
+- Adapter tests for an HTTP-based SDK count requests at the HTTP layer with a transport-level fake and recorded responses, including a lost response.
 
 #### 11. Provider options
 
@@ -331,7 +406,7 @@ What the SDK does:
 
 - `run()` and `Sandbox()` take `provider_options={"<provider>": {...}}`.
 - The engine sends only the active provider's entry, and only keys on that adapter's allowlist in its caps: resources, image or template, environment, and region (region only on an adapter whose list call covers every region, so gc can still find the sandbox).
-- Lifecycle and label keys (timeout, auto-stop, pause-on-timeout, ephemeral, ttlSeconds, tags, metadata, labels) are never on an allowlist, so the TTL, the labels and the confirmed delete still apply.
+- Lifecycle and label keys (timeout, ttl_minutes, auto_stop_interval, auto-stop, pause-on-timeout, ephemeral, ttlSeconds, tags, metadata, labels) are never on an allowlist, so the TTL, the labels and the confirmed delete still apply.
 - An unlisted key, or an entry for an unknown provider name, raises `ConfigError` before create, naming it.
 - Every entry is checked against its adapter's allowlist, which is part of the caps and loads without the provider SDK.
 - `sb.native` gives the provider SDK's own sandbox object.
@@ -344,6 +419,7 @@ Tests:
 
 - An unlisted key and an unknown provider name each raise `ConfigError` with no create call.
 - A listed key reaches the fake create.
+- A unit test checks that no adapter's allowlist holds a lifecycle or label key.
 - `outside_contract` is set on the Result and on the `Sandbox`, and on a `Sandbox` with no entry once `sb.native` is touched. An entry for another provider does not set it.
 - A `task.toml` `environment` list resolves from the local environment, and a missing variable and a literal value table each raise `ConfigError` with no create call.
 - A `verify` run with a `task.toml` provider table shows `outside_contract` true in that provider's row, and a planted secret in one of its environment variables is absent from the report.
@@ -352,7 +428,7 @@ Tests:
 
 What the SDK does:
 
-- The engine holds each create until the provider's documented start rate allows it. It uses one locked token bucket per provider with a capacity of 1, so creates on one provider are at least 60/rate seconds apart (5 seconds at 12 a minute).
+- The engine holds each create until the provider's documented start rate allows it. It uses one locked token bucket per provider with a capacity of 1, so creates on one provider are at least 60/rate seconds apart (5 seconds at 12 a minute). A caller reserves its slot under the lock and sleeps outside it, so no caller holds the lock while it waits.
 - The rate comes from the adapter's `creates_per_minute` cap.
 - A user overrides it in two ways:
   - `ANYCOMPUTE_CREATES_PER_MINUTE` sets the rate for every provider in the process (providers with no documented rate are then paced too). The engine reads it once, at the first create.
@@ -363,7 +439,7 @@ What the SDK does:
 
 Tests:
 
-- A unit test runs 50 concurrent `run()` calls on the fake provider with a rate of 12 a minute on a fake clock and checks that creates are at least 5 seconds apart.
+- A unit test runs 50 concurrent `run()` calls on the fake provider with a rate of 12 a minute on a fake clock. It checks that creates are at least 5 seconds apart and that the nth caller waits at most (n - 1) x 5 seconds.
 - Unit tests cover the override rules.
 - A `verify --lifecycle` unit test on a paced fake provider checks that the killed child starts only after a pacer token.
 
@@ -379,9 +455,9 @@ gc rules:
 
 - `anycompute gc --run <id>` deletes that run's leftovers: every sandbox of the run the user names, running or not.
 - `anycompute gc --all` deletes only sandboxes with the `anycompute=1` label whose create time (from the provider's list API) plus their `anycompute-ttl` plus the maximum grace period is before now. The grace period also covers clock skew up to 120 seconds.
-- On an adapter whose `idle_timer` cap is true, so the provider ends or stops the sandbox only after idle time and not at its TTL (Daytona), the provider must also report the sandbox as stopped. boat.dev stops at its TTL, so it keeps the age rule.
-- On an adapter whose caps declare `pre_start_window: partial` (docker, whose timer starts only when the container starts), `gc --all` also requires the sandbox not to be running (created and never started, or exited). A running docker container ends itself at its TTL.
-- A labeled sandbox with no TTL label, or with no create time in the list (Modal), is kept.
+- On an adapter whose caps declare `pre_start_window: partial` (docker, whose timer starts only when the container starts), `gc --all` also requires the sandbox not to be running (created and never started, or exited). A running docker container ends itself at its TTL. A sandbox whose state is `unknown` counts as running, so gc keeps it (reason `running`).
+- A labeled sandbox with no TTL label, or with no create time in the list (Modal), is kept. A malformed `anycompute-ttl` label counts as no TTL label (`no_ttl_label`).
+- gc deletes one sandbox at a time and continues past a failed delete: that row's action is `failed`, the other deletes still run, and gc exits 125 at the end.
 - So without `--force`, `gc --all` never kills a running job. `--force` is required to delete a sandbox that these rules keep, and it can delete a running sandbox.
 - `--dry-run` prints the list without deleting.
 - gc never deletes a sandbox without the `anycompute=1` label.
@@ -390,29 +466,34 @@ gc rules:
 Tests:
 
 - After a killed client, `gc` finds the sandbox by its label with no file on disk.
-- Unit tests on the fake provider cover: expired, young, no TTL label, no create time, expired but running with `idle_timer` true, and a running sandbox with `pre_start_window: partial` that is expired by create time (kept).
+- Unit tests on the fake provider cover: expired, young, no TTL label, a malformed TTL label, no create time, and a running sandbox with `pre_start_window: partial` that is expired by create time (kept). They also cover a sandbox in state `unknown` with `pre_start_window: partial` that is expired by create time (kept, reason `running`).
+- With two expired sandboxes whose first delete fails, gc still deletes the second, reports the rows `failed` and `deleted`, and exits 125.
+- gc spares a sandbox with a matching run label but no `anycompute=1` label, under `--run` and under `--all --force`, and `--dry-run` deletes nothing.
+- A unit test checks the run-ID precedence (`run_id=`, then `ANYCOMPUTE_RUN_ID` read once, then the generated ID) and the `[a-z0-9-]{1,40}` check.
 
 ### Kill-client test
 
-This is the test that a `finally` block cannot pass on its own.
+This is the test that a `finally` block cannot pass on its own. The flow lives once, in `lifecycle.py`, and takes the child launcher and the observer as arguments. It has one pass-rule function per lifetime value: `hard` passes on gone, and `partial` passes on gone or stopped. The conformance harness and `verify --lifecycle` both call it.
 
-1. The harness sets `ANYCOMPUTE_RUN_ID` and starts `anycompute run --json --ttl 120 -- sh -c 'touch ready; while :; do :; done'` as a child process. The command runs in `/tmp/anycompute`.
+1. The harness sets `ANYCOMPUTE_RUN_ID` to `<run ID>-kc` and starts `anycompute run --json --ttl 120 -- sh -c 'touch ready; while :; do :; done'` as a child process. The run ID is the harness's own run ID (the workflow run ID in CI, a generated ID in a local run), cut to 37 characters when it is longer. The command runs in `/tmp/anycompute`.
 2. A separate observer, which uses the adapter's state, list and read calls, finds the child's sandbox by its `anycompute-run` label. It polls the read call until the `ready` file exists, which shows that the workload is running and busy.
 3. The harness then kills the child with SIGKILL.
-4. The observer polls the provider's API until the sandbox is gone.
+4. The observer polls the provider's API until the sandbox is gone, or stopped on a `partial` lifetime.
 
 Rules:
 
 - The marker is a file, not a stdout line, because the v0.1 CLI prints stdout only after the command ends.
-- The marker wait ends at the TTL. With no marker by then, the test fails and the harness runs `gc --run` for its run ID.
-- Every observer call goes through the engine's worker-thread wait with the time left before the test's deadline (the TTL plus the maximum grace period).
-- The contract fixes a maximum grace period of 120 seconds after the TTL. A different value for one adapter needs a reviewed commit and is set before measurement.
+- The marker wait ends at the TTL. With no marker by then, the test fails and the harness runs `gc --run` for the child run ID (`<run ID>-kc`).
+- Every observer call goes through the engine's waited-call helper with the time left before the test's deadline (the TTL plus the maximum grace period). The observer polls on the engine's poll schedule (rule 4).
+- The maximum grace period is one constant in the engine: 120 seconds after the TTL, the same for every adapter.
 - The test reports the measured time separately and fails when it exceeds the TTL plus the maximum grace period.
 
-Harness unit tests:
+Unit tests (one set on the fake for both callers, plus the live docker run):
 
 - With an observer stub, the kill comes only after the marker.
-- With a stub that never sees the marker, the test fails and the harness calls gc.
+- With a stub that never sees the marker, the test fails and the harness calls gc for `<run ID>-kc`.
+- A unit test checks the `-kc` run ID: a 40-character harness run ID gives a 40-character child run ID, and a local run with no workflow run ID uses a generated ID.
+- A table test checks the pass rule per lifetime value. A sandbox that ends after the TTL plus the grace period fails, and the test reports its measured time.
 
 ### Capability table
 
@@ -420,10 +501,11 @@ Harness unit tests:
 - A rule the provider cannot enforce is declared `partial` (a `labels_at_create` of false shows as `partial`), the docs say so, and `verify` reports it.
 - The SDK never claims a guarantee that the conformance suite has not shown.
 - The table also shows each adapter's `isolation`, in `anycompute providers` and in the README's copy of the table. Its unit test checks that column.
+- `anycompute providers` shows each key source as set or unset, never its value. A unit test checks it.
 
 Declared gaps:
 
-- **Daytona lifetime** is `partial` until the suite shows that its auto-stop ends a sandbox that runs a busy command with no client activity (auto-stop may be an idle timer, not a deadline).
+- **Daytona lifetime** is `partial` until the lifetime and kill-client tests show that Daytona deletes the sandbox at the TTL (`ttl_minutes`; see the Daytona adapter). Then it becomes `hard`.
 - **boat.dev lifetime** is `partial`: its TTL stops the VM and keeps the disk. For a `partial` lifetime, the kill-client and lifetime tests pass when the VM is stopped within the TTL plus the maximum grace period; the suite's gc then deletes it and verifies the delete. The docs tell users that a killed client on boat.dev leaves a stopped VM and its disk until gc runs, and that storage may bill until then.
 - **docker lifetime** is hard once the container starts. The window between create and start, where no timer runs, is declared in its own cap, `pre_start_window: partial`. So docker's lifetime, kill-client and Lifecycle checks still use the hard pass rule (with auto-remove, an ended container is gone), and a stopped container fails. gc deletes a container left in that window.
 - **Modal create and exec retries** are `partial`: its gRPC layer retries calls and has no public switch. Its list shows running sandboxes only and no create time, so `gc --all` keeps Modal sandboxes unless `--force`; its hard timeout ends them anyway.
@@ -461,10 +543,15 @@ anycompute providers                                  # adapters, capability tab
 
 - Uploads each `--file <local path>` (repeatable) into `/tmp/anycompute` under its base name before the command, through the same engine upload as the Python API. A missing local file or two files with the same base name raise `InvalidPathError` before create.
 - Prints the run ID to stderr before the command starts.
-- Passes the sandbox's stdout and stderr through.
-- Writes `--read` files to `./anycompute-out/<run-id>/` (or `--out <dir>`).
+- Passes the sandbox's stdout and stderr through. With `--json` there is no pass-through: stdout holds one JSON document.
+- Writes `--read` files to `./anycompute-out/<run-id>/`, or to `<dir>/<run-id>/` with `--out <dir>`. It checks that the folder is writable before create. When it is not, the CLI raises `ConfigError` (exit 126) and makes no sandbox.
 - Exits with the sandbox command's exit code.
 - When the job finished but the delete fails, the CLI writes stdout, stderr and the `--read` files first, then exits 125.
+
+Tests:
+
+- `--json` prints one JSON document on stdout with no pass-through, and the run ID reaches stderr before the command starts.
+- An output folder that is not writable raises `ConfigError` (exit 126) with no create call, and `--out <dir>` writes under `<dir>/<run-id>/`.
 
 ### Exit codes
 
@@ -478,13 +565,20 @@ An anycompute error exits with its own code, with one line on stderr:
 | 123 | `SandboxTimeoutError` |
 | 124 | `ProviderError` |
 | 125 | `CleanupError` |
-| 126 | `InvalidTTLError`, `InvalidPathError` or `ConfigError` |
-| 130 | `KeyboardInterrupt` (rule 5): after one interrupt and its cleanup, or when a second interrupt stopped the cleanup |
+| 126 | `InvalidTTLError`, `InvalidPathError` or `ConfigError` (including CLI usage errors) |
+| 130 | `KeyboardInterrupt` (rule 5): after one interrupt and its cleanup, when a second interrupt stopped the cleanup, or when an interrupt during create gave a lost create |
 
 - An error that carries a `cleanup_error` (rule 5) exits with its own code, and its stderr line and `error` object add the copyable gc command.
 - For `RateLimitError` the stderr line gives `retry_after` and, when the adapter's caps record one, the provider's documented start rate with its source URL.
 - These codes can collide with the command's own exit code (and 124 and 126 are also timeout and shell codes). So the README and `anycompute run --help` state the collision and tell scripts to read the `error` field of `--json`, not the exit code.
 - `--json` mode uses the same exit codes.
+- On every subcommand (`run`, `verify`, `gc`, `providers`), a usage error raises `ConfigError` (exit 126), with the JSON error under `--json`.
+- On every subcommand, a top-level handler prints any other uncaught exception as a redacted `ProviderError` with `internal` true (exit 124).
+
+Tests:
+
+- An unknown flag on each subcommand (`run`, `verify`, `gc`, `providers`), a missing `--provider`, `--ttl abc`, and `gc` with both `--run` and `--all` each exit 126, with a JSON error under `--json`.
+- A CLI test makes a subcommand raise an uncaught exception and checks a redacted JSON `ProviderError` with `internal` true and exit 124.
 
 ### Copyable gc command
 
@@ -516,10 +610,10 @@ On `CleanupError`, on a `ProviderError` with `sandbox_may_exist`, and on any err
 }
 ```
 
-- On an error, `error` is `{"type", "message", "sandbox_id", "run_id", "retry_after", "sandbox_may_exist", "gc_command", "cleanup_error"}`. A key that does not apply is null, and `cleanup_error` is null or `{"type", "message"}`.
+- On an error, `error` is `{"type", "message", "sandbox_id", "run_id", "retry_after", "sandbox_may_exist", "internal", "gc_command", "cleanup_error"}`. A key that does not apply is null, and `cleanup_error` is null or `{"type", "message"}`.
 - With an error, the Result keys hold what the error carries (the partial stdout and stderr of `SandboxTimeoutError`, the completed Result of `CleanupError`) and are null otherwise. `provider` and `run_id` are always set.
 - `gc --json` prints `{"provider", "run_id", "dry_run", "sandboxes": [{"sandbox_id", "run_id", "created_at", "action", "reason"}], "error"}`. `run_id` is null for `--all`. `created_at` is an ISO 8601 UTC string, or null when the list shows none. `action` is `deleted`, `kept`, `listed` (dry run) or `failed` (its delete raised `CleanupError`). `reason` is one of `run_match`, `expired`, `young`, `no_ttl_label`, `no_create_time`, `running` or `force`.
-- `verify --json` prints `{"rows": [...], "summary", "anycompute_version", "source", "suite_version", "error"}`. Each row is `{"provider", "exit_code", "output", "files", "cleanup", "lifecycle", "runtime", "error", "sandbox_seconds", "outside_contract", "provider_sdk_version"}`. `exit_code` and `cleanup` are `pass` or `fail`; `output` (stdout and stderr) and `files` are `pass` or `differs`; `lifecycle` is `pass`, `fail` or null without `--lifecycle`; `runtime` is `{"python", "arch", "api_host"}`.
+- `verify --json` prints `{"rows": [...], "summary", "anycompute_version", "source", "suite_version", "error"}`. Each row is `{"provider", "exit_code", "output", "files", "cleanup", "lifecycle", "partial_caps", "runtime", "error", "sandbox_seconds", "outside_contract", "provider_sdk_version"}`. `exit_code` and `cleanup` are `pass` or `fail`; `output` (stdout and stderr) and `files` are `pass` or `differs`; `lifecycle` is `pass`, `partial`, `fail` or null without `--lifecycle`; `partial_caps` lists the provider's rule caps that are `partial`, built from its caps; `runtime` is `{"python", "arch", "api_host"}`.
 
 ### verify
 
@@ -536,30 +630,47 @@ compare = "all"                    # or "exit_code"; default "all"
 [providers.modal]                  # optional; only keys on that adapter's allowlist
 environment = ["MY_TOKEN"]         # variable names only; values come from the local environment
 ```
-`anycompute verify` runs the job once per provider and reports, per provider and field:
+`anycompute verify` runs the job once per provider, one provider at a time in the `--providers` order, and reports, per provider and field:
 
 - **Exit code:** equal to the expected exit code in `task.toml`.
 - **stdout and stderr:** equal as decoded text across providers. A difference is reported with both values, and `task.toml` can set `compare = "exit_code"` to compare only exit codes.
 - **Files:** equal SHA-256 across providers for each read file. A file missing on one provider is a mismatch.
 - **Runtime:** the Python version and CPU architecture per provider, detected here once per provider (outside verify, only by `run(..., runtime=True)`). A difference is reported, not failed, and a missing interpreter is reported as "unknown". The runtime record also names the provider API host that the adapter called, as the scheme and host only (userinfo stripped; a unix socket is recorded as `local`), so a `verify` run or a `runtime=True` run against an E2B-compatible host is never reported as just `e2b`.
-- **Cleanup (after the job):** the provider's API shows the sandbox deleted within the maximum grace period after the job, on every adapter. A stopped sandbox is not a pass.
+- **Cleanup (after the job):** the adapter's state call reports the sandbox `gone` within the maximum grace period after the job, on every adapter. A list that no longer shows the sandbox is not proof, and a stopped sandbox is not a pass.
+- **Partial caps:** each row's `partial_caps` lists the rule caps that the provider declares `partial` (a `labels_at_create` of false counts), so the report shows each partial rule. The rule caps are the Capability table's rule columns: `lifetime`, `pre_start_window`, `create_retry`, `exec_retry` and `labels_at_create`.
+
+Tests: unit tests cover `compare = "exit_code"`, a stopped sandbox in the Cleanup field (fail), and the `partial_caps` of a fake provider with a `partial` lifetime.
 
 **Lifecycle field (`--lifecycle`):**
 
-- `verify` does not run the kill-client test by default. `--lifecycle` adds it as a separate **Lifecycle** field (killed client: ended within the `effective_ttl` plus the grace period).
-- The killed child runs the same marker-then-busy workload as the kill-client test, under the TTL from `task.toml`, and is killed only after the observer reads the `ready` file. `verify` starts the child with `ANYCOMPUTE_RUN_ID` set to its own run ID, so its gc delete finds the child's sandbox. The marker wait, the observer budget and the pass deadline below use the child's `effective_ttl`.
+- `verify` does not run the kill-client test by default. `--lifecycle` adds it as a separate **Lifecycle** field (killed client: ended within the `effective_ttl` plus the grace period), through the shared flow in `lifecycle.py`.
+- The killed child runs the same marker-then-busy workload as the kill-client test, under the TTL from `task.toml`, and `verify` kills it only after the observer reads the `ready` file. The marker wait, the observer budget and the pass deadline below use the child's `effective_ttl`.
+- The child run ID is `<parent run ID>-lc`, with the parent ID cut to 37 characters when it is longer. `verify` starts the child through the child launcher that `lifecycle.py` takes, and passes the launcher the child run ID. So the gc delete for that run ID finds the child's sandbox.
+  - The default launcher runs `sys.executable -m anycompute run` (the package has a `__main__.py`) with `ANYCOMPUTE_RUN_ID` set to the child run ID.
+  - Unit tests pass an in-process launcher from `tests/fakes/`. It runs the child's `run()` in a thread with `run_id=` set to the child run ID, through its own fake client over the same in-memory sandboxes. So the observer and the gc delete see the child's sandbox.
+  - The in-process launcher's kill makes that client hang every later call, so the child never deletes its sandbox. The sandbox then follows the fake's scripted state sequence.
 - The child always uses the provider's default options. When that provider's row used a `task.toml` provider table, the Lifecycle field shows "default options" next to its result, and a unit test checks that label. The README says the field checks the provider's lifetime and delete enforcement, not the team's image.
-- The marker wait ends at the `effective_ttl`. With no marker by then, the Lifecycle field fails with "no marker by the TTL", and `verify` runs its gc delete for its own run ID and confirms it. Observer calls get the time left before the TTL plus the grace period. A unit test with a fake that never shows the marker checks the failure and the gc call.
+- The marker wait ends at the `effective_ttl`. With no marker by then, the Lifecycle field fails with "no marker by the TTL", and `verify` runs its gc delete for the child's run ID and confirms it. Observer calls get the time left before the TTL plus the grace period. A unit test with a fake that never shows the marker checks the failure and the gc call.
 - `verify` takes a pacer token for that provider before it starts the child. This adds one sandbox and up to the TTL plus the grace period per provider on the user's accounts.
-- After the check, `verify --lifecycle` runs the gc delete for its own run ID, confirms the delete, and reports `CleanupError` when the delete fails. On a `partial` lifetime the Lifecycle field passes on "stopped", and the delete must still confirm.
+- After the check, `verify --lifecycle` runs the gc delete for the child's run ID, confirms the delete, and reports `CleanupError` when the delete fails. The `CleanupError` carries the child run ID, so its copyable gc command names `<parent run ID>-lc`.
+- A unit test makes the fake delete fail after the Lifecycle check. It checks that the `CleanupError` and its gc command name `<parent run ID>-lc`, and that a 40-character parent run ID gives a 40-character child run ID.
+- On a `partial` lifetime, a sandbox stopped by the deadline gives the Lifecycle value `partial`, and the delete must still confirm. A `partial` Lifecycle does not change the exit status.
 
 **Summary line:**
 
 - `verify` ends with one summary line. In plain mode it is the last stdout line; with `--json` it is a `summary` field, so the JSON stays parseable.
-- The reference is the first provider in `--providers` with no error.
+- The reference is the first provider in `--providers` with no error. When every provider raised an error, there is no reference, and the line lists each error.
 - The line is "portable on <providers>" only when `verify` would exit 0. Otherwise it joins clauses with "; " in this order: "error on <provider>: <error type>", "fails on <provider>: <fields>" (Exit code against `task.toml`, Cleanup, Lifecycle), "differs on <provider>: <fields>" (stdout, stderr and files against the reference), then "runtime differs: <values>".
+- The line never says "portable" alone when a provider has a `partial` lifetime. It adds the clause "partial lifetime on <providers>", and that clause always goes last.
 
-**Exit status:** `verify` runs every provider even when one fails. It exits with the 120-126 code of the first anycompute error any provider raised (such as `CleanupError` from `--lifecycle`). With no such error, it exits 1 when any Exit code, stdout and stderr, Files, Cleanup or Lifecycle field fails, and 0 otherwise. A Runtime difference is reported and never changes the exit code. A unit test with fake providers checks three cases: a `CleanupError` on one provider and a field mismatch on another exits 125; a field mismatch alone exits 1; a Runtime difference alone exits 0.
+**Exit status:** `verify` runs every provider even when one fails. It exits with the 120-126 code of the first anycompute error any provider raised (such as `CleanupError` from `--lifecycle`). With no such error, it exits 1 when any Exit code, stdout and stderr, Files, Cleanup or Lifecycle field fails, and 0 otherwise. `verify` reports a Runtime difference or a `partial` Lifecycle, and neither changes the exit code.
+
+Tests (unit tests with fake providers):
+
+- A `CleanupError` on one provider and a field mismatch on another exits 125; a field mismatch alone exits 1; a Runtime difference alone exits 0.
+- With every provider in error, there is no reference, `verify` exits with the first error's code, and the summary lists each error.
+- A provider with a `partial` lifetime gets a `partial` Lifecycle with exit 0, and a summary that is not "portable" alone, with the lifetime clause last.
+- A failing run that includes a `partial`-lifetime provider puts the lifetime clause after every other clause.
 
 ### gc
 
@@ -572,6 +683,7 @@ Build order: docker first, right after the engine and the fake provider, so the 
 The facts below come from the docs check of 2026-11-23 (public docs and SDK source only, no provider call). These items are checked again against each provider's docs when its adapter is written; that check is the starting point, not a guarantee:
 
 - the exact lifetime knobs, their granularity, and their limits;
+- the native sandbox states that the state call maps, and the list call's paging and label filter;
 - whether the SDK returns command output as text or bytes;
 - the provider's documented start rate with its source URL;
 - the adapter's `provider_options` allowlist keys (boat.dev has no custom image, so it has no image key);
@@ -587,15 +699,17 @@ Official `modal` Python SDK.
 - TTL maps to the sandbox timeout (a hard deadline, up to 24 hours).
 - Labels map to tags (at most 10).
 - Delete maps to terminate. The finished record stays readable, and the list omits it.
-- A sandbox needs an App. The adapter looks up one App per process, once, under a lock (`App.lookup("anycompute", create_if_missing=True)`) and passes its `app_id` to every list.
+- A sandbox needs an App. The adapter looks up one App per process (`App.lookup("anycompute", create_if_missing=True)`) inside its first waited call, under that call's budget, and passes its `app_id` to every list. The adapter holds no lock across the lookup; a lock guards only the stored `app_id`.
 - Its gRPC retries cannot be turned off, so `create_retry` and `exec_retry` are `partial`.
+- Its `key_sources` cover the token environment variables and every profile in the config file, not only the active one. The config file is the file at `MODAL_CONFIG_PATH` when it is set, else `~/.modal.toml`. A unit test checks that the engine redacts a key in a non-default profile of a `MODAL_CONFIG_PATH` file.
+- Its unit tests stub the SDK's exceptions, because its calls go over gRPC, not HTTP.
 - It is the first live cloud adapter.
 
 ### E2B
 
 Official `e2b` Python SDK (Python 3.11 or newer).
 
-- TTL maps to the sandbox timeout.
+- TTL maps to the sandbox timeout. `ttl_max_s` is 3600 in v0.1: E2B allows 1 hour on its Hobby plan and 24 hours on Pro (docs.e2b.dev/sandbox, checked 2026-11-23), and the adapter cannot read the plan. A longer TTL raises `InvalidTTLError` before create.
 - Labels map to `metadata`.
 - Delete maps to kill.
 - The adapter never sets the pause-on-timeout option. The lifetime and kill-client tests pass only when the sandbox is gone, not paused.
@@ -605,7 +719,8 @@ Official `e2b` Python SDK (Python 3.11 or newer).
 
 Official `daytona` Python SDK.
 
-- Created as ephemeral, with the auto-stop interval set from the TTL.
+- TTL maps to `ttl_minutes` (whole minutes, so `ttl_unit_s` is 60). The Daytona SDK reference documents it as a wall-clock limit from creation: Daytona destroys the sandbox at that limit, even a stopped one (checked 2026-11-23). The adapter sets `auto_stop_interval` to the same minutes and creates the sandbox as ephemeral.
+- Its lifetime stays `partial` until the live lifetime and kill-client tests show a delete at the TTL (see Declared gaps).
 - Labels map to `labels`.
 - Delete maps to delete. Its SDK wait gets only the time left on the engine's cleanup deadline.
 - The adapter pins its SDK version (the package moved to the daytona/clients repository at version 2.x) and records the namespace it uses.
@@ -615,9 +730,9 @@ Official `daytona` Python SDK.
 Official `boat-sdk`, sync only. boat.dev sells long-lived VMs, has no free tier and no custom image.
 
 - TTL maps to `ttlSeconds`. This is a stop, so the lifetime is `partial`.
+- `ttl_max_s` is 480 in v0.1. boat.dev limits a synchronous command to 600 seconds (boat.dev limits page, checked 2026-11-23). So the exec budget (the TTL plus the 120-second grace) never passes it, and the adapter has no detached-command path.
 - Labels map to `labels`.
 - Delete sends the confirm header and returns on the 202. The engine's confirm poll waits for the asynchronous delete within the 120-second cleanup deadline.
-- A synchronous command is limited to 600 seconds, so the adapter uses a detached command and polls when the engine's budget is longer.
 - The suite paces boat.dev creates at 6 a minute, half of the 12 starts a minute that the $20 plan allows, which is also its `creates_per_minute` cap.
 
 ### docker
@@ -627,39 +742,48 @@ Official `docker` Python SDK, local.
 - A detached container with auto-remove, the three labels, and one image pinned by its multi-architecture index digest: a `python:3.12-slim` index digest, so it runs on amd64 runners and arm64 Macs, and has `sh`, `mkdir`, `sleep` and `python3`.
 - The adapter always sets the entrypoint to `sleep <ttl>`, whatever image a user passes. So PID 1 is always the timer, and the Docker daemon ends and removes the container at the TTL even after a client SIGKILL (a hard deadline once started). An image with no `sleep` fails at create with `ProviderError`.
 - Docker creates and starts a container in two calls, so a client that dies between them leaves a container with no timer. That window is declared in docker's own `pre_start_window: partial` cap and docs, while its lifetime stays hard. gc deletes such a container: `gc --all` treats it as expired by create time plus TTL plus grace, and deletes a docker container only while it is not running. A unit test interrupts between create and start.
+- A start that fails after create (for example an image with no `sleep`) runs the delete and confirm before the error leaves (rule 5).
+- The engine calls the adapter's `prepare` (the pinned image pull) before create, as its own waited call. Its budget is the TTL plus the maximum grace period (rule 2), because the TTL counts only from create. A pull that reaches its budget raises `ProviderError` (exit 124) with no create call.
 - A registry pull limit or other pull failure during the image pull raises `ProviderError`, not `RateLimitError`, because it is not the provider's start rate.
 - The TTL has no provider maximum on docker.
-- Delete maps to `remove(force=True)`, which also removes a container that was created but never started. A 404 counts as accepted. A 409 counts as accepted only for "removal already in progress". The engine's state call confirms. Recorded-response unit tests cover the 404 and both 409 cases.
-- The client comes from docker-py's `from_env` with its context fallback, so the adapter finds the same daemon as the user's own `docker` command: `DOCKER_HOST`, then the current docker context, whose default is the default socket. There is no custom discovery code. A unit test checks that `DOCKER_HOST` wins and that the current context is used when it is unset. `from_env` takes `use_context=True` by default in docker-py's main branch (docker/client.py, checked 2026-11-23); the pinned docker-py version is checked for it when the adapter is built.
+- Delete maps to `remove(force=True)`, which also removes a container that was created but never started. A 404 counts as a successful delete request. A 409 counts as a successful delete request only for "removal already in progress". The engine's state call confirms. Recorded-response unit tests cover the 404 and both 409 cases.
+- The client comes from docker-py's `from_env` with its context fallback, so the adapter finds the same daemon as the user's own `docker` command: `DOCKER_HOST`, then the current docker context, whose default is the default socket. There is no custom discovery code. A unit test checks that `DOCKER_HOST` wins and that the current context is used when it is unset. docker-py 7.2.0 (released 2026-07-09) is the first release whose `from_env` takes `use_context=True` by default; 7.1.0 lacks it (docker/client.py at both tags, checked 2026-11-23). So the docker extra requires `docker>=7.2`.
 - An unreachable daemon raises `ProviderError` with a one-line hint.
 - The client is created with no read timeout (docker-py defaults to 60 seconds), so the engine's budget controls each call.
-- docker-py asks the daemon for its API version while it builds the client. So the adapter builds the client inside its first waited call (create in a run; list or state when gc or the observer calls first), under that call's budget. A hang in a create is reported like any create that reaches its budget, as a lost create, and gc then finds nothing. A unit test with a hung version request checks that create returns at its budget.
-- Exec goes through the engine's worker-thread wait, files go through archives, and list filters by label and shows a create time.
+- docker-py asks the daemon for its API version while it builds the client. So the adapter builds the client inside its first waited call (the image pull in a run; list or state when gc or the observer calls first), under that call's budget. A hang there raises `ProviderError` at that budget, before any container exists. A unit test with a hung version request checks that the run returns at the pull's budget with no create call.
+- Exec goes through the engine's waited-call helper, files go through archives, and list filters by label and shows a create time.
 - Every container also gets `security_opt=["no-new-privileges"]` and `pids_limit=4096` (processes and threads). Neither is on the `provider_options` allowlist, and a recorded-create unit test checks both.
 - Its caps declare `isolation` as a container on the host kernel. The README says that docker is not a boundary for untrusted code, unlike a provider that runs each sandbox in its own VM.
 - It needs no account or key. So `ci.yml` runs the full live conformance suite on it on every pull request at $0 (the lifecycle tests, that is the lifetime, kill-client and delete-verification tests, plus the working-directory, argument and exit-code tests), and a user's first run costs nothing.
-- Docker Hub pull limits on GitHub runners are checked when it is built (cache the pinned image if needed).
+- The docker job pulls the pinned image in a setup step before the tests, so no test spends its timeout on a pull.
 
 ## Test layout
 
-- `tests/unit/` tests the engine rules against the fake provider, and the adapter mappings from recorded responses, with no keys. Rules that exist only in the Python API (the `Sandbox` object and its `close()`, the `cleanup_error` attribute, thread safety) are tested only here.
-- `tests/conformance/` holds the live tests. They drive the CLI (`anycompute run --json`, `verify`, `gc`) as a subprocess and read only its JSON and exit codes about the job. A separate observer checks provider state and reads the kill-client marker file. A later TypeScript CLI can be tested by the same suite and observer, so they can become the language-neutral runner.
+- The test framework is pytest with pytest-timeout.
+- `tests/unit/` tests the engine rules against the fake provider (`tests/fakes/`), and the adapter mappings from recorded responses, with no keys. Transport-level fakes and plain recorded fixture files test the HTTP adapters. CLI subprocess tests run the fake launcher. Each unit test has a 30-second timeout. Rules that exist only in the Python API (the `Sandbox` object and its `close()`, the `cleanup_error` attribute, thread safety) are tested only here.
+- `tests/conformance/` holds the live tests. They drive the CLI (`anycompute run --json`, `verify`, `gc`) as a subprocess and read only its JSON and exit codes about the job. A separate observer checks provider state and reads the kill-client marker file, and the harness runs the kill-client flow from `lifecycle.py`. `tests/conformance/conftest.py` gives each live test 540 seconds (TTL 120 + grace 120 + the rule 3 state call 120 + cleanup 120 + a 60-second margin) for each sandbox the test creates in sequence. A test that runs `verify` gets 540 seconds per provider in its `--providers` list, and 540 more per provider with `--lifecycle` for the child sandbox. The test sets this timeout with `pytest.mark.timeout`. So a `verify --lifecycle` test on two providers gets 4 x 540 seconds. The job limits stay 30 minutes (`ci.yml` docker job) and 90 minutes (`conformance.yml`). A later TypeScript CLI can be tested by the same suite and observer, so they can become the language-neutral runner.
 
 ## Repository layout
 
 ```
-pyproject.toml                  # uv; console script "anycompute"; requires-python >=3.11; extras modal, e2b, daytona, boat, docker, all
-src/anycompute/__init__.py     # the engine: run, Sandbox, every contract rule the Python API enforces, gc selection, verify checks, redaction; exports
-src/anycompute/contract.py     # Result, error types, Provider protocol and caps, capability table built from caps
-src/anycompute/cli.py          # flags, local --file and task.toml input reads, run ID print, output: run, verify, gc, providers; --json with the error field; only CLI rules
-src/anycompute/providers/{fake,e2b,modal,daytona,boat,docker}.py   # thin adapters; each imports its SDK only when used
+pyproject.toml                  # uv; console script "anycompute"; requires-python >=3.11; extras modal, e2b, daytona, boat, docker (docker>=7.2), all; dev group: pytest, pytest-timeout (30 s per unit test, 540 s per sequential sandbox per conformance test); HTTP tests use transport-level fakes
+src/anycompute/__init__.py     # re-exports only; __all__ pins the public API
+src/anycompute/__main__.py     # python -m anycompute, used for the verify --lifecycle child
+src/anycompute/engine.py       # run, Sandbox, every contract rule the Python API enforces, gc selection, redaction, the clock and the waited-call helper
+src/anycompute/verify.py       # verify checks and report
+src/anycompute/lifecycle.py    # the kill-client flow and its pass rules, shared by verify --lifecycle and the conformance harness
+src/anycompute/contract.py     # types only: Result, ExecResult, SandboxState, error types, Provider protocol and caps
+src/anycompute/cli.py          # flags and usage errors, local --file and task.toml input reads, output folder check, run ID print, output: run, verify, gc, providers; --json with the error field; the top-level handler; only CLI rules
+src/anycompute/providers/__init__.py   # the PROVIDERS registry and the capability table built from caps
+src/anycompute/providers/{e2b,modal,daytona,boat,docker}.py   # thin adapters; each imports its SDK only when used
+tests/fakes/                    # the fake provider and its CLI test launcher; not shipped
 tests/unit/                     # engine rules against the fake provider; adapter mappings from recorded responses; no keys
-tests/conformance/              # live tests that drive the CLI with --json, plus an observer; kill-client and delete verification
-tests/conformance/runner.py     # the spend runner: reservation per CLI launch, $2 per-run budget, stop on cleanup failure
+tests/conformance/              # live tests that drive the CLI with --json, plus an observer; kill-client and delete verification; conftest.py sets the timeout of 540 s per sequential sandbox
+tests/conformance/runner.py     # the spend runner: reservation per CLI launch, duplicate check, $2 per-run budget, stop on cleanup failure, run-limit count
 tests/conformance/prices.toml   # Next Step 1 price record: one table per provider, each value with its source URL and checked date
 .github/workflows/ci.yml        # unit tests on every pull request, Python 3.11 to 3.15, plus the full live conformance suite in a docker job (timeout-minutes: 30 on that job)
-.github/workflows/conformance.yml  # live tests: weekly and manual dispatch (adapters as inputs; first step enforces the run limit), protected environment with provider keys (timeout-minutes: 90)
-.github/workflows/release.yml   # PyPI trusted publishing, signed release, then a $0 smoke run of the published package on docker
+.github/workflows/conformance.yml  # live tests: weekly (the live_run adapters other than docker) and manual dispatch (adapters as inputs); a keyless run-limit gate job, then keyed test jobs in a main-only protected environment, each with a pre-run gc sweep, a step timeout and an always() gc step (timeout-minutes: 90)
+.github/workflows/release.yml   # on a v* tag: a build job, a publish job in the pypi environment (trusted publishing, signed release), then a $0 smoke run of the published package on docker
 ```
 
 ## Distribution
@@ -667,12 +791,18 @@ tests/conformance/prices.toml   # Next Step 1 price record: one table per provid
 - **Package:** `anycompute` on PyPI, with the `anycompute` console script and one extra per provider. Users install only the SDKs they use: `pipx install 'anycompute[modal]'`, or run it with `uvx --from 'anycompute[modal]' anycompute run ...`. `anycompute[all]` installs every provider SDK. A missing extra raises `ConfigError`, which names the extra to install. Python 3.11 or newer.
 - **Pipeline:** GitHub Actions.
   - Unit tests and the docker conformance suite on every pull request, with no keys.
-  - Live conformance once a week and on manual dispatch, in a protected environment that holds the project's provider keys, under the spend rules above.
-  - Releases publish to PyPI through trusted publishing (OIDC) and carry signed attestations.
-- **Post-release smoke run:** after each publish, `release.yml` installs `anycompute[docker]==<version>` from PyPI on a clean runner and runs `anycompute providers` and one docker job.
+  - Live conformance once a week and on manual dispatch, in a protected environment that holds the project's provider keys and allows deployments only from main, under the spend rules above.
+  - Every workflow pins third-party actions by commit SHA and sets least-privilege `permissions`.
+  - `release.yml` runs on a push of a `v*` tag. A build job with no `id-token` makes the sdist and the wheel. A publish job in the `pypi` environment holds the only `id-token: write` and publishes to PyPI through trusted publishing (OIDC) with signed attestations. The `pypi` environment allows only `v*` tags, and a maintainer must confirm each deployment. The smoke run follows the publish.
+- **Post-release smoke run:** after each publish, `release.yml` installs `anycompute[docker]==<version>` from PyPI on a clean runner and runs `anycompute providers` and one docker job. A classifier in the smoke job sorts each failure into one of three outcomes:
   - The install retries every 20 seconds for up to 10 minutes, because PyPI's index can lag after an upload. An install that never succeeds fails the job as "install failed", and the README's release runbook says to check PyPI and re-run the job.
-  - Only a package failure after a successful install makes the runbook yank that version and ship a patch: `anycompute providers` fails, or the docker job returns a wrong result or raises an error other than `ProviderError`.
-  - A `ProviderError` from the docker job (daemon unreachable, image pull failure or throttling) fails the job as "infrastructure", and the runbook says re-run. When a re-run fails the same way, the maintainer investigates before any yank.
+  - Only a package failure after a successful install makes the runbook yank that version and ship a patch. A package failure is one of these:
+    - `anycompute providers` fails.
+    - The docker job returns a wrong result.
+    - The docker job raises a `ProviderError` with `internal` true.
+    - The docker job raises an error other than `ProviderError`.
+  - A `ProviderError` with `internal` false from the docker job (daemon unreachable, image pull failure or throttling) fails the job as "infrastructure", and the runbook says re-run. When a re-run fails the same way, the maintainer investigates before any yank.
+  - Classifier unit tests cover each outcome, including one test for a `ProviderError` with `internal` false (infrastructure) and one with `internal` true (package failure).
 - **Results:** each conformance run writes a report (pass, fail, and the measured time to end and delete, per adapter and rule) that the README links. The public report publishes results by provider name; if a provider objects, its results are removed (see Live runs). Every conformance and verify report also records:
   - `anycompute_version`;
   - `source`: `user-run` by default; `project-run` only when `conformance.yml`, or the docker job in `ci.yml` on main, sets `ANYCOMPUTE_REPORT_SOURCE=project-run`;
@@ -689,33 +819,33 @@ Version 0.1 is done when all of these are true:
 2. The conformance suite passes on Modal, including the kill-client test and delete verification, in the public CI on its weekly schedule.
 3. `anycompute verify` produces a report for one real workload on two cloud providers, Modal and boat.dev.
 4. boat.dev passes the suite with its `partial` rules declared.
-5. E2B and Daytona each pass the live conformance suite in the public CI, with any rule the provider cannot enforce declared `partial`. If a provider objects to the project's runs before the release, its runs stop, its results are removed, and its adapter ships as a "not run live" adapter with its fixtures rebuilt from the provider's published docs (see Live runs), marked as such in the capability table and the README.
+5. E2B and Daytona each pass the live conformance suite in the public CI, with any rule the provider cannot enforce declared `partial`. If a provider objects to the project's runs before the release, its runs stop, its results are removed, and its adapter ships as a "not run live" adapter with its fixtures from the provider's published docs (see Live runs), marked as such in the capability table and the README.
 6. Version 0.1.0 is on PyPI through trusted publishing, with a signed release.
 7. The full live conformance suite on the docker adapter, including the lifecycle tests, is a required check on every pull request (set by branch protection on main), and it passes on main.
 8. The Next Step 9 features ship with their tests. The Next Step 4 docker work (the docker adapter, its pre-start window, and the kill-client marker workload) ships with its unit tests. The docker adapter and the marker workload are also proven live by the docker suite in criterion 7, and the pre-start window by its unit test only.
 
 ## Open question
 
-- **Framework plug-ins after v0.1:** a LangChain Deep Agents backend (its protocol needs only `execute()`), an OpenAI Agents SDK custom client, a Harbor environment type.
+- **Framework plug-ins after v0.1:** a LangChain Deep Agents backend (its protocol needs only `execute()`), an OpenAI Agents SDK custom client, a Harbor environment type, a NeMo Gym sandbox provider.
 
 ## Next Steps
 
-1. **Prices.** Record in `tests/conformance/prices.toml` each provider's default-size price, start fee (or zero at the suite's pacing), stopped-storage price, billing granularity and minimum charge, each with its source URL and checked date, for the runner's reservation (the Modal price is missing). Check that a run's worst case (15 sandboxes x compute for 240 s, plus start fees, plus one week of stopped storage on boat.dev and Daytona) fits under $2 per adapter. If it does not, lower the sandboxes per run or raise the per-run budget and recompute the monthly totals.
-2. **Engine first.** Add the layout above to this repository. Add the fake provider, the contract types, the Provider protocol and the engine first.
+1. **Prices.** Record in `tests/conformance/prices.toml` each provider's default-size price, start fee (or zero at the suite's pacing), stopped-storage price, billing granularity and minimum charge, each with its source URL and checked date, for the runner's reservation (the Modal price is missing). Check that a run's worst case fits under $2 per adapter: 15 sandboxes x compute for 240 s, plus start fees, plus one week of stopped storage on boat.dev and Daytona. On Modal, count 30 sandboxes, because its reservation counts two sandboxes per create. If it does not, lower the sandboxes per run or raise the per-run budget and recompute the monthly totals.
+2. **Engine first.** Add the layout above to this repository. Add the fake provider (in `tests/fakes/`, with its launcher), the contract types, the Provider protocol and the engine first.
 3. **Unit tests.** Write the unit tests for `run`, `Sandbox`, the error mapping (recorded responses), the cleanup and expiry outcomes, and the capability table against the fake provider, plus these engine rules:
    - each of the 9 error types;
-   - client timeouts, the worker-thread wait and the cleanup deadline;
+   - client timeouts, the waited-call helper on a swapped clock, the cleanup deadline and the poll schedule;
    - the gc rules;
    - redaction;
    - the CLI exit codes and JSON (a command that exits 121 against a `RateLimitError`, told apart only by the `error` field; stdout, stderr and the `--read` files written before exit 125 on `CleanupError`);
    - text decoding;
    - runtime detection (no detection call unless `runtime=True`; "unknown" for a missing interpreter);
    - 50 concurrent `run()` calls that check distinct sandbox IDs, correct run and TTL labels, and a confirmed delete for each.
-4. **Docker first.** Write the docker adapter, with its pre-start window declared `partial` and its unit test. Write the spend runner and its unit tests (a fake delete that fails: no further launch, `gc --run`, nonzero exit; a launch that would pass $2 is refused; a fifth manual dispatch in a month is refused). Write the conformance harness and the observer, including the kill-client marker workload, the observer's read-based wait for the `ready` file, and the harness unit test. Run the harness on docker locally and in `ci.yml` until it passes. Docker runs cost $0 and have no run limit, so the harness is debugged before any Modal run is spent. Branch protection waits for Next Step 9.
+4. **Docker first.** Write the docker adapter, with its pre-start window declared `partial` and its unit test. Write the spend runner and its unit tests (a fake delete that fails: no further launch, `gc --run`, nonzero exit; a launch that would pass $2 is refused; the run-limit, duplicate-create and non-JSON cases in Spend rules). Write `conformance.yml` with its keyless run-limit gate job, the attempt check in each test job, the pre-run `gc --all` sweep, the step timeout and the `always()` gc step. Pin its third-party actions by commit SHA, and create its protected environment with a main-only deployment branch rule. Write the conformance harness and the observer, including the kill-client marker workload, the observer's read-based wait for the `ready` file, and the harness unit test. Run the harness on docker locally and in `ci.yml` until it passes. Docker runs cost $0 and have no run limit, so the harness is debugged before any Modal run is spent. Branch protection waits for Next Step 9.
 5. **Modal.** Write the Modal adapter and run the live conformance tests from Next Step 4 on it, driven through the CLI: the same suite, including the kill-client test with its marker.
-6. **boat.dev.** Add the boat.dev adapter with its declared `partial` rules.
+6. **boat.dev.** Add the boat.dev adapter with its declared `partial` rules and `ttl_max_s` 480.
 7. **verify.** Write `verify` and its report. Run it on one real workload on Modal and boat.dev, through a manual dispatch of `conformance.yml`.
-8. **E2B and Daytona live.** Add the E2B and Daytona adapters and run the live conformance suite on them, driven through the CLI as in Next Step 5.
+8. **E2B and Daytona live.** Add the E2B adapter (`ttl_max_s` 3600) and the Daytona adapter (`ttl_minutes`; `partial` until the live tests show a delete at the TTL). Run the live conformance suite on them, driven through the CLI as in Next Step 5.
 9. **Post-Modal features and branch protection.** After the Modal conformance run passes, set branch protection on main with the docker conformance job as a required check, and build these features. Add a CLI unit test for each of the copyable gc command line, the `RateLimitError` line and the verify summary line, and assertions on the report version fields, the API host in the runtime record and `Result.sandbox_seconds` in the `--json` and verify output.
    - the create pacer;
    - `provider_options` and `sb.native`;
@@ -728,7 +858,7 @@ Version 0.1 is done when all of these are true:
    - a one-line verify summary;
    - the gc hint after an interrupted cleanup;
    - the opt-in debug logger, with a unit test that plants a key in a logged error and checks each LogRecord's message, args and exc_info, not only the formatted text, and a CLI test of the silent default and `--verbose`;
-   - the post-release smoke run on docker and the yank-and-patch runbook;
+   - the post-release smoke run on docker, its classifier and the yank-and-patch runbook;
    - late-create reconciliation;
    - `task.toml` provider tables for `verify`.
-10. **Release.** Set up trusted publishing and release 0.1.0, after Next Steps 6 to 9.
+10. **Release.** Set up trusted publishing (the `pypi` environment with its tag rule and maintainer confirmation) and release 0.1.0, after Next Steps 6 to 9.
