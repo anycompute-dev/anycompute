@@ -22,7 +22,7 @@ Deferred work for anycompute. The v0.1 design is in docs/design.md.
 
 **Why:** Distribution through a framework that users already have brings the lifecycle rules (provider-enforced TTL, confirmed delete) to every provider the framework user picks.
 
-**Context:** Deferred from v0.1; docs/design.md, Open question, already names framework plug-ins. Map execute to Sandbox.exec(['sh','-c',cmd]), id to sandbox_id, uploads and downloads to Sandbox.write and Sandbox.read; set has_sync=True and has_async=False. Proof: LangChain's SandboxIntegrationTests (86 tests) on Modal as one manual dispatch, then one docs pull request. Checks first: the test fixture must create at most 15 sandboxes per run (the per-run limit in docs/design.md, Constraints); Deep Agents file tools use absolute paths, so the backend needs a written exception to InvalidPathError; pin the deepagents version range.
+**Context:** Deferred from v0.1; docs/design.md, Open question, already names framework plug-ins. Map execute to Sandbox.exec(['sh','-c',cmd]), id to sandbox_id, uploads and downloads to Sandbox.write and Sandbox.read; set has_sync=True and has_async=False. Proof: LangChain's SandboxIntegrationTests (86 tests) on Modal as one manual dispatch, then one docs pull request. Checks first: the test fixture must create at most 15 sandboxes per run (Run size in docs/design.md, Constraints, Spend rules); Deep Agents file tools use absolute paths, so the backend needs a written exception to InvalidPathError; pin the deepagents version range.
 
 **Effort:** M
 **Priority:** P2
@@ -99,5 +99,29 @@ Deferred work for anycompute. The v0.1 design is in docs/design.md.
 **Effort:** S
 **Priority:** P3
 **Depends on:** v0.1 released, and a user reports a memory problem with large stdout.
+
+### require= execution policy
+
+**What:** Add `require=` (Python) and `--require` (CLI). A workload names the guarantees it needs, for example a hard lifetime, a confirmed delete or labels at create. anycompute refuses a provider whose caps cannot meet them before any create. `verify` reports "portable under <policy>".
+
+**Why:** Callers and framework plug-ins can then use the capability table to refuse a provider before create, not only to read a report.
+
+**Context:** Deferred from v0.1. Start from the typed caps (docs/design.md, The stateless contract, One engine) and the verify partial-cap reporting (`partial_caps` and the summary clause; docs/design.md, CLI, verify). It adds API surface and one error path before create. A rule that asks for recent passing results would also need a published results feed.
+
+**Effort:** M
+**Priority:** P3
+**Depends on:** v0.1 released, and the first framework plug-in needs it or a user asks to refuse partial providers.
+
+### Longer TTLs on E2B Pro and boat.dev
+
+**What:** Raise the v0.1 TTL caps (E2B `ttl_max_s` 3600, boat.dev `ttl_max_s` 480) for longer jobs: a plan-aware maximum on E2B, and detached commands on boat.dev.
+
+**Why:** E2B Pro allows 24 hours and boat.dev sells long-lived VMs, but v0.1 refuses a TTL above its caps with `InvalidTTLError`.
+
+**Context:** E2B does not document what happens when a TTL passes a plan's limit, a refusal or a clamp (checked 2026-11-23), and the adapter cannot read the plan. Start with a recorded-response test that shows which one happens. If E2B clamps, the adapter reads back the end time. boat.dev limits a synchronous command to 600 seconds. So a longer exec needs a detached command that the engine polls on its poll schedule and clock (docs/design.md, The stateless contract, Delete). The adapter holds no poll loop. Recorded-response tests cover the detached path.
+
+**Effort:** M
+**Priority:** P3
+**Depends on:** v0.1 released, and a user asks for a longer job on E2B or boat.dev.
 
 ## Completed
