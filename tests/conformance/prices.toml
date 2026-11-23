@@ -1,0 +1,62 @@
+# Price record for the conformance runner's worst-case reservation
+# (docs/design.md, Constraints, Spend rules).
+#
+# One table per provider. Every value is an inline table:
+#   value      the number (USD, seconds) or text
+#   source     the public page that states it
+#   checked    the date the source was read
+#   published  false when the provider publishes no figure and the value is a stated assumption
+#   note       how the number is derived, or what the source leaves open
+#
+# The runner reserves, for each sandbox a CLI launch can create:
+#   (effective_ttl + 120 s grace) x compute_usd_per_hour / 3600
+#   + start_fee_usd
+#   + stopped_storage_usd_per_week on partial-lifetime adapters (boat.dev, Daytona)
+# On an adapter whose create_retry cap is partial (Modal), it counts two sandboxes per create.
+#
+# Prices are for the size a create gets when it sets no size (the adapters never set one).
+
+[modal]
+default_size = { value = "0.125 physical CPU core (0.25 vCPU), 128 MiB", source = "https://modal.com/docs/guide/sandbox-resources", checked = "2026-11-23" }
+compute_usd_per_hour = { value = 0.020741, source = "https://modal.com/pricing", checked = "2026-11-23", note = "Sandbox (non-preemptible) rates: $0.00003942 per core-second and $0.00000667 per GiB-second; 0.125 core and 0.125 GiB for 3600 s. Modal bills max(request, actual), so a sandbox that bursts costs more. No region multiplier, because the adapter sets no region." }
+start_fee_usd = { value = 0.0, source = "https://modal.com/pricing", checked = "2026-11-23", note = "No per-create fee is listed." }
+stopped_storage_usd_per_week = { value = 0.0, source = "https://modal.com/docs/guide/sandboxes", checked = "2026-11-23", note = "A finished Sandbox keeps no disk." }
+granularity_s = { value = 1, source = "https://modal.com/pricing", checked = "2026-11-23" }
+min_charge_s = { value = 0, source = "https://modal.com/docs/guide/billing", checked = "2026-11-23", note = "\"there are no minimum usage-time increments\"" }
+plan_fee_usd_per_month = { value = 0.0, source = "https://modal.com/pricing", checked = "2026-11-23", note = "Starter plan: $0 plus compute, with $30 a month of free credits." }
+
+[e2b]
+default_size = { value = "2 vCPU, 4 GiB (reservation size; see note)", source = "https://e2b.dev/pricing", checked = "2026-11-23", note = "The docs say Sandbox.create() with no template uses the base template with 2 vCPU and 512 MiB (docs.e2b.dev/template/base-image); the pricing page calls 2 vCPU and 4 GiB the default. The reservation uses the larger size until the adapter's docs check settles it." }
+compute_usd_per_hour = { value = 0.1656, source = "https://e2b.dev/pricing", checked = "2026-11-23", note = "$0.000014 per vCPU-second and $0.0000045 per GiB-second: 2 x 0.0504 + 4 x 0.0162 per hour. At 512 MiB it is $0.1089." }
+start_fee_usd = { value = 0.0, source = "https://docs.e2b.dev/billing.md", checked = "2026-11-23", note = "Hobby and Pro list no per-create fee; creates are rate-limited (1 a second on Hobby)." }
+stopped_storage_usd_per_week = { value = 0.0, source = "https://docs.e2b.dev/billing.md", checked = "2026-11-23", note = "The adapter kills at timeout and never pauses; compute billing stops when a sandbox is killed or times out." }
+granularity_s = { value = 1, source = "https://docs.e2b.dev/billing.md", checked = "2026-11-23" }
+min_charge_s = { value = 0, published = false, source = "https://docs.e2b.dev/billing.md", checked = "2026-11-23", note = "No minimum charge is published; billing is per second." }
+plan_fee_usd_per_month = { value = 0.0, source = "https://docs.e2b.dev/billing.md", checked = "2026-11-23", note = "Hobby is $0 a month with a one-time $100 credit; Pro ($150 a month) adds no credit." }
+
+[daytona]
+default_size = { value = "1 vCPU, 1 GiB, 3 GiB disk", source = "https://www.daytona.io/docs/en/sandboxes.md", checked = "2026-11-23" }
+compute_usd_per_hour = { value = 0.0666, source = "https://www.daytona.io/pricing", checked = "2026-11-23", note = "$0.0504 per vCPU-hour plus $0.0162 per GiB-hour; the 3 GiB disk is inside the first 5 free GiB." }
+start_fee_usd = { value = 0.0, source = "https://www.daytona.io/docs/en/billing", checked = "2026-11-23", note = "No per-create fee; creating and starting are billed as running time." }
+stopped_storage_usd_per_week = { value = 0.0, source = "https://www.daytona.io/docs/en/billing", checked = "2026-11-23", note = "The adapter creates ephemeral sandboxes, which Daytona deletes on stop, so stopped billing does not apply." }
+granularity_s = { value = 1, source = "https://www.daytona.io/pricing", checked = "2026-11-23" }
+min_charge_s = { value = 0, published = false, source = "https://www.daytona.io/pricing", checked = "2026-11-23", note = "No minimum charge is published; billing is per second." }
+plan_fee_usd_per_month = { value = 0.0, source = "https://www.daytona.io/pricing", checked = "2026-11-23", note = "Pay as you go, with $200 of free compute." }
+
+[boat]
+default_size = { value = "4 vCPU, 8 GB, 51 GB disk (type default)", source = "https://docs.boat.dev/machines.md", checked = "2026-11-23", note = "The API's create request defaults type to default." }
+compute_usd_per_hour = { value = 0.036, source = "https://docs.boat.dev/pricing", checked = "2026-11-23" }
+start_fee_usd = { value = 0.0, source = "https://docs.boat.dev/limits.md", checked = "2026-11-23", note = "The $20 plan includes 12 starts a minute, 60 an hour and 200 a day; the suite paces creates at 6 a minute and makes at most 15 a run. Extra starts cost $0.03 to $0.07 each." }
+stopped_storage_usd_per_week = { value = 0.0, source = "https://docs.boat.dev/billing.md", checked = "2026-11-23", note = "A stopped sandbox keeps its disk free for at least 14 days; only saved snapshots past the included count charge." }
+granularity_s = { value = 1, source = "https://docs.boat.dev/pricing", checked = "2026-11-23" }
+min_charge_s = { value = 0, published = false, source = "https://docs.boat.dev/billing.md", checked = "2026-11-23", note = "\"You pay for exactly the seconds that you used\"; no minimum is stated." }
+plan_fee_usd_per_month = { value = 20.0, source = "https://docs.boat.dev/pricing", checked = "2026-11-23", note = "Not an extra fee: every dollar comes back as VM time, which expires at the end of the billing period." }
+
+[docker]
+default_size = { value = "local machine", source = "local docker", checked = "2026-11-23" }
+compute_usd_per_hour = { value = 0.0, source = "local docker", checked = "2026-11-23", note = "No provider account; exempt from the run limit." }
+start_fee_usd = { value = 0.0, source = "local docker", checked = "2026-11-23" }
+stopped_storage_usd_per_week = { value = 0.0, source = "local docker", checked = "2026-11-23" }
+granularity_s = { value = 1, source = "local docker", checked = "2026-11-23" }
+min_charge_s = { value = 0, source = "local docker", checked = "2026-11-23" }
+plan_fee_usd_per_month = { value = 0.0, source = "local docker", checked = "2026-11-23" }
