@@ -6,7 +6,7 @@ anycompute is an open-source Python SDK and CLI. One call or one command runs a 
 
 ## Status
 
-Early development. There is no code or release yet, so do not depend on the API.
+Early development. There is no code or release yet, so do not depend on the API. The v0.1 design is in [docs/design.md](docs/design.md), and deferred work is in [TODOS.md](TODOS.md).
 
 ## License
 
