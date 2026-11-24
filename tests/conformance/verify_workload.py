@@ -3,12 +3,10 @@
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 import tomllib
 
 from anycompute import engine
-from anycompute.contract import AnycomputeError
 from anycompute.lifecycle import _Observer
 from tests.conformance.runner import (
     TEST_TIMEOUT_S, VERIFY_ADAPTERS, ConformanceFailure, ConformanceRunner, _discard_process, _read_report,
@@ -80,12 +78,16 @@ def _verification(env):
 
 def main() -> int:
     try:
-        report = _verification(os.environ)
-    except (AnycomputeError, ConformanceFailure, OSError, subprocess.SubprocessError, KeyError, ValueError):
-        print("Cross-provider verification stopped. See the counted attempt and cleanup jobs.", file=sys.stderr)
-        return 1
-    print(json.dumps(report, allow_nan=False))
-    return 0
+        print(json.dumps(_verification(os.environ), allow_nan=False))
+    except ConformanceFailure as error:
+        # The runner checks used here raise fixed messages without provider or subprocess output.
+        reason = str(error)
+    except Exception as error:
+        reason = type(error).__name__
+    else:
+        return 0
+    print(f"Cross-provider verification stopped. {reason}", file=sys.stderr)
+    return 1
 
 
 if __name__ == "__main__":

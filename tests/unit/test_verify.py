@@ -117,7 +117,7 @@ def test_exit_code_only_still_reports_runtime_and_partial_caps(tmp_path, registe
     assert report["source"] == "project-run"
     assert report["rows"][1]["partial_caps"] == ["lifetime", "create_retry", "labels_at_create"]
     assert report["rows"][1]["lifecycle"] is None
-    assert report["rows"][1]["output"] == "pass"
+    assert all(row["output"] is row["files"] is None for row in report["rows"])
     assert report["summary"] == (
         "portable on first, second; runtime differs: first (unknown, x86_64), second (unknown, unknown); "
         "partial lifetime on second"
@@ -135,8 +135,27 @@ def test_first_error_kind_wins_and_every_provider_is_attempted(tmp_path, registe
     assert code == 121
     assert report["error"] == report["rows"][0]["error"]
     assert report["summary"] == "error on first: RateLimitError; error on second: QuotaError"
+    assert all(row["output"] is row["files"] is None for row in report["rows"])
     assert "retry_after=3s" in err and "QuotaError" in err
     assert all([call["op"] for call in adapter.calls] == ["prepare", "create"] for adapter in adapters.values())
+
+
+def test_single_result_has_no_comparison_even_with_requested_readback(tmp_path, register, capsys):
+    register("first", ("second", {"script": {"create": [{"error": 401}]}}))
+    code, report, _ = run_json(task_file(tmp_path, 'read = ["out"]\n'), capsys)
+    assert code == 120
+    assert report["rows"][0]["exit_code"] == "pass"
+    assert all(row["output"] is row["files"] is None for row in report["rows"])
+
+
+@pytest.mark.parametrize("readback", [False, True])
+def test_matching_results_mark_only_performed_checks_as_pass(tmp_path, register, capsys, readback):
+    options = {"script": {"exec": [{"stdout": "match", "files": {"out": "same"}}]}}
+    register(("first", options), ("second", options))
+    code, report, _ = run_json(task_file(tmp_path, 'read = ["out"]\n' if readback else ""), capsys)
+    assert code == 0
+    assert all(row["output"] == "pass" for row in report["rows"])
+    assert [row["files"] for row in report["rows"]] == ["pass" if readback else None] * 2
 
 
 def test_cleanup_error_keeps_result_and_takes_precedence_over_mismatch(tmp_path, register, capsys):
@@ -184,10 +203,10 @@ def test_registered_short_key_masks_dynamic_text_and_keeps_verify_statuses(tmp_p
 
 
 def test_provider_options_are_local_and_secret_stays_out_of_report(tmp_path, register, capsys, monkeypatch):
-    secret = "private-task-environment"
-    monkeypatch.setenv("VERIFY_TEST_TOKEN", secret)
+    payload = "private-task-environment"
+    monkeypatch.setenv("VERIFY_TEST_TOKEN", payload)
     adapters, _ = register(
-        ("first", {"script": {"exec": [{"stdout": secret}]}}),
+        ("first", {"script": {"exec": [{"stdout": payload}]}}),
         ("second", {"script": {"exec": [{"stdout": "output"}]}}),
     )
     task = task_file(tmp_path, '[providers.first]\nenvironment = ["VERIFY_TEST_TOKEN"]\n')
@@ -195,9 +214,9 @@ def test_provider_options_are_local_and_secret_stays_out_of_report(tmp_path, reg
     assert code == 1
     assert [row["outside_contract"] for row in report["rows"]] == [True, False]
     assert report["rows"][1]["details"]["stdout"]["reference"] == "***"
-    assert secret not in json.dumps(report) + err
+    assert payload not in json.dumps(report) + err
     assert [call["options"] for call in adapters["first"].calls if call["op"] == "create"] == [
-        {"environment": {"VERIFY_TEST_TOKEN": secret}},
+        {"environment": {"VERIFY_TEST_TOKEN": payload}},
     ]
 
 

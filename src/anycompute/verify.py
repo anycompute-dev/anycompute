@@ -108,8 +108,8 @@ def _run_one(task, spec, run_id, ctx, check_lifecycle):
         "run_id": ctx.redact(result.run_id) if result else None,
         "effective_ttl": result.effective_ttl if result else None,
         "exit_code": "pass" if result and result.exit_code == task.exit_code else "fail",
-        "output": "pass",
-        "files": "pass",
+        "output": None,
+        "files": None,
         "cleanup": cleanup,
         "lifecycle": lifecycle_status,
         "partial_caps": [name for name in _PARTIAL_RULES if getattr(spec.caps, name) in ("partial", False)],
@@ -132,6 +132,9 @@ def _compare(outcome, reference, read, redact):
     other = reference.result
     assert result is not None and other is not None
     details = row["details"]
+    row["output"] = reference.row["output"] = "pass"
+    if read:
+        row["files"] = reference.row["files"] = "pass"
     for name in ("stdout", "stderr"):
         first, actual = getattr(other, name), getattr(result, name)
         if first != actual:

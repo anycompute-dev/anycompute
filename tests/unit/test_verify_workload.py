@@ -1,11 +1,12 @@
 from dataclasses import replace
 import json
+import subprocess
 from types import SimpleNamespace
 
 import pytest
 
 from anycompute import engine, providers
-from anycompute.contract import ProviderCaps, ProviderSpec, SandboxInfo
+from anycompute.contract import ProviderCaps, ProviderError, ProviderSpec, SandboxInfo
 from tests.conformance import runner, verify_workload
 from tests.fakes import FakeClock
 
@@ -151,3 +152,30 @@ def test_verify_report_must_match_reservation_and_confirm_cleanup(context, key, 
     transport.report_mismatch = key, value
     with pytest.raises(runner.ConformanceFailure):
         verify_workload._verification(env)
+
+
+def test_verify_entrypoint_reports_safe_sweep_failure(context, capsys, monkeypatch):
+    env, transport = context
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    transport.sweep_fails = "boat"
+    assert verify_workload.main() == 1
+    out = capsys.readouterr()
+    assert out.out == ""
+    assert "Could not confirm the pre-run sweep" in out.err
+
+
+@pytest.mark.parametrize("failure", [
+    ProviderError("private provider message"),
+    RuntimeError("private runtime message"),
+    subprocess.CalledProcessError(1, ["private command"], output="private stdout", stderr="private stderr"),
+])
+def test_verify_entrypoint_reports_only_type_for_runtime_failures(capsys, monkeypatch, failure):
+    def broken_verify(_):
+        raise failure
+
+    monkeypatch.setattr(verify_workload, "_verification", broken_verify)
+    assert verify_workload.main() == 1
+    out = capsys.readouterr()
+    assert out.out == ""
+    assert out.err == "Cross-provider verification stopped. " + type(failure).__name__ + "\n"
