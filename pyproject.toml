@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "anycompute"
+version = "0.1.0"
+description = "Run short, stateless sandbox jobs across providers."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+
+[project.scripts]
+anycompute = "anycompute.cli:main"
+
+[project.urls]
+Repository = "https://github.com/anycompute-dev/anycompute"
+
+[dependency-groups]
+dev = ["pytest>=8.4", "pytest-timeout>=2.4"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/anycompute"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit"]
+pythonpath = ["."]
+timeout = 30
