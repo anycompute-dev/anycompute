@@ -2,23 +2,24 @@ from decimal import Decimal
 
 import pytest
 
+from anycompute.contract import ProviderCaps
 from tests.conformance.runner import Reservation, SpendLimitError, load_prices, reserve_launch
 
 pytestmark = pytest.mark.timeout(30)
 
 
 @pytest.mark.parametrize(
-    ("provider", "sandboxes", "usd"),
+    ("provider", "creates", "sandboxes", "usd"),
     [
-        ("modal", 30, "0.041482"),
-        ("e2b", 15, "0.1656"),
-        ("daytona", 15, "0.0666"),
-        ("boat", 15, "0.036"),
-        ("docker", 15, "0"),
+        ("modal", 7, 28, "0.5027988"),
+        ("e2b", 15, 15, "0.1656"),
+        ("daytona", 15, 15, "0.066924"),
+        ("boat", 15, 15, "0.036"),
+        ("docker", 15, 15, "0"),
     ],
 )
-def test_maximum_sized_run_at_recorded_prices(provider, sandboxes, usd):
-    result = reserve_launch(load_prices(), provider, Reservation(), [120] * 15)
+def test_maximum_sized_run_at_recorded_prices(provider, creates, sandboxes, usd):
+    result = reserve_launch(load_prices(), provider, Reservation(), [120] * creates)
     assert (result.sandboxes, result.usd) == (sandboxes, Decimal(usd))
 
 
@@ -35,7 +36,7 @@ def synthetic_prices(provider, **overrides):
 
 @pytest.mark.parametrize(
     ("provider", "sandboxes", "usd"),
-    [("modal", 4, "0.168"), ("boat", 2, "0.144"), ("daytona", 2, "0.144"), ("e2b", 2, "0.084")],
+    [("modal", 8, "0.336"), ("boat", 2, "0.144"), ("daytona", 2, "0.144"), ("e2b", 2, "0.084")],
 )
 def test_billing_applies_per_create_including_lifecycle_child(provider, sandboxes, usd):
     result = reserve_launch(synthetic_prices(provider), provider, Reservation(), [1, 61])
@@ -61,13 +62,17 @@ def test_division_does_not_change_the_budget_boundary():
     assert result.usd == Decimal("2")
 
 
-@pytest.mark.parametrize("provider", ["docker", "modal"])
-def test_sandbox_limit_counts_fifteen_creates_even_with_zero_cost(provider):
+@pytest.mark.parametrize(("provider", "creates", "allocations", "caps"), [
+    ("docker", 15, 15, ProviderCaps()),
+    ("modal", 7, 28, ProviderCaps(create_retry="partial")),
+    ("daytona", 15, 15, ProviderCaps(create_retry="partial", lifetime="partial")),
+])
+def test_project_allocation_bound_caps_logical_creates(provider, creates, allocations, caps):
     prices = load_prices()
-    state = reserve_launch(prices, provider, Reservation(), [1] * 14)
-    assert reserve_launch(prices, provider, state, [1]).sandboxes == (30 if provider == "modal" else 15)
-    with pytest.raises(SpendLimitError, match=rf"{provider}.*15"):
-        reserve_launch(prices, provider, state, [1, 1])
+    state = reserve_launch(prices, provider, Reservation(), [1] * (creates - 1), caps=caps)
+    assert reserve_launch(prices, provider, state, [1], caps=caps).sandboxes == allocations
+    with pytest.raises(SpendLimitError, match=rf"{provider}.*{creates}"):
+        reserve_launch(prices, provider, state, [1, 1], caps=caps)
 
 
 @pytest.mark.parametrize("ttl", [-1, 121, 1.5, 1.0, True, "60", None])

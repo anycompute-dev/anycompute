@@ -1,6 +1,7 @@
 """Modal Sandbox adapter. Import the optional SDK on the first operation."""
 
 import asyncio
+import os
 from collections.abc import Mapping, Sequence
 from threading import Lock
 
@@ -11,6 +12,8 @@ from ..contract import (
 
 _APP_LOCK = Lock()
 _app = None
+_CONFORMANCE_SDK_VERSION = "1.6.4"
+_CONFORMANCE_IMAGE = "anycompute-conformance:v1"
 _AUTH_FIELDS = ("token_id", "token_secret", "oauth_refresh_token", "oauth_client_id", "oauth_client_secret",
                 "oauth_jwt_key")
 
@@ -82,20 +85,61 @@ async def _read_process(process, ended_errors):
     )
 
 
+def _check_conformance(sdk, options):
+    if options:
+        raise ConfigError("Modal conformance requires default provider options")
+    if getattr(sdk, "__version__", None) != _CONFORMANCE_SDK_VERSION:
+        raise ConfigError(f"Modal conformance requires SDK {_CONFORMANCE_SDK_VERSION}")
+    try:
+        throttle_wait = sdk.config.config.get("max_throttle_wait")
+    except (TypeError, ValueError):
+        throttle_wait = None
+    if type(throttle_wait) is not int or throttle_wait != 0:
+        raise ConfigError("Modal conformance requires MODAL_MAX_THROTTLE_WAIT=0")
+
+
 class _Modal:
+    def __init__(self) -> None:
+        self._prepared = None
+
     def prepare(self, *, options: Mapping[str, object], timeout_s: float) -> None:
-        pass
+        if os.environ.get("ANYCOMPUTE_CONFORMANCE_LIVE") != "1":
+            return
+
+        def resolve(sdk):
+            _check_conformance(sdk, options)
+            image = sdk.Image.from_name(_CONFORMANCE_IMAGE).hydrate()
+            return _lookup_app(sdk), image
+
+        self._prepared = None
+        self._prepared = _call("prepare conformance image and app", resolve)
 
     def create(self, *, ttl: int, labels: Mapping[str, str], options: Mapping[str, object], timeout_s: float) -> str:
-        image = options.get("image")
-        if image is not None and (not isinstance(image, str) or not image or any(c.isspace() or c == "\0" for c in image)):
+        registry_image = options.get("image")
+        if registry_image is not None and (not isinstance(registry_image, str) or not registry_image
+                                           or any(c.isspace() or c == "\0" for c in registry_image)):
             raise ConfigError("Modal image must be a nonempty image reference")
-        app = _call("look up app", _lookup_app)
+        project = os.environ.get("ANYCOMPUTE_CONFORMANCE_LIVE") == "1"
+        if project:
+            if type(ttl) is not int or not 1 <= ttl <= 120:
+                raise ConfigError("Modal conformance requires a TTL between 1 and 120 seconds")
+            if self._prepared is None:
+                raise ConfigError("Modal conformance requires a prepared image and app")
+            app, image = self._prepared
+        else:
+            app = _call("look up app", _lookup_app)
 
         def create_sandbox(sdk):
+            if project:
+                _check_conformance(sdk, options)
+                return sdk.Sandbox.create(
+                    "sleep", "infinity", app=app, tags=dict(labels), timeout=ttl, runtime="gvisor",
+                    image=image, cpu=(0.125, 1), memory=(128, 512), block_network=True,
+                ).object_id
             return sdk.Sandbox.create(
                 "sleep", "infinity", app=app, tags=dict(labels), timeout=ttl, runtime="gvisor",
-                image=sdk.Image.from_registry(image) if image is not None else None, env=options.get("environment"),
+                image=sdk.Image.from_registry(registry_image) if registry_image is not None else None,
+                env=options.get("environment"),
             ).object_id
 
         sandbox_id = _call("create", create_sandbox)

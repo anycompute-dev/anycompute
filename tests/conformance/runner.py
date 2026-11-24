@@ -21,6 +21,9 @@ from anycompute.lifecycle import _LifecycleResult, _child_run_id, _kill_client, 
 
 MAX_CREATES = 15
 MAX_TTL_S = 120
+# Project adapter guards enforce these submission limits on the locked SDKs.
+_PROJECT_CREATE_ATTEMPTS = {"modal": 4, "daytona": 1}
+_MODAL_MAX_CREATES = 7  # Stay below the previous 30-allocation ceiling.
 VERIFY_ADAPTERS = ("modal", "boat")
 GRACE_S = engine._GRACE_S
 TEST_TIMEOUT_S = 540
@@ -84,12 +87,13 @@ def reserve_launch(
     sandboxes = _integer(prior.sandboxes, "reserved sandbox count")
     total = _money(prior.usd_seconds, "reserved cost")
     ttls = tuple(effective_ttls)
-    partial_retry = caps.create_retry == "partial" if caps is not None else provider == "modal"
+    partial_retry = caps is not None and caps.create_retry == "partial"
     partial_lifetime = caps.lifetime == "partial" if caps is not None else provider in {"boat", "daytona"}
-    multiplier = 2 if partial_retry else 1
+    multiplier = _PROJECT_CREATE_ATTEMPTS.get(provider, 2 if partial_retry else 1)
+    max_creates = _MODAL_MAX_CREATES if provider == "modal" else MAX_CREATES
     sandboxes += multiplier * len(ttls)
-    if sandboxes > multiplier * MAX_CREATES:
-        raise SpendLimitError(f"{provider}: launch would exceed {MAX_CREATES} creates")
+    if sandboxes > multiplier * max_creates:
+        raise SpendLimitError(f"{provider}: launch would exceed {max_creates} creates")
 
     try:
         terms = prices[provider]
@@ -265,6 +269,8 @@ def select_provider(env: Mapping[str, str]) -> ProviderSpec:
         raise ValueError("ANYCOMPUTE_CONFORMANCE_PROVIDER does not name a registered adapter") from None
     if name != "docker" and not spec.caps.live_run:
         raise ValueError("Selected adapter is not enabled for live conformance")
+    if name == "modal" and env.get("MODAL_MAX_THROTTLE_WAIT") != "0":
+        raise ValueError("Modal conformance requires MODAL_MAX_THROTTLE_WAIT=0")
     return spec
 
 

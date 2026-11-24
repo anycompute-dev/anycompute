@@ -2,11 +2,13 @@
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+from importlib.metadata import PackageNotFoundError, version
 from math import ceil, isfinite
 from os import getenv
 from secrets import token_hex
 from shlex import join, quote
 from threading import Lock
+from uuid import UUID
 
 from ..contract import (
     AuthError, ConfigError, KeySources, ProviderCaps, ProviderError, ProviderSpec, QuotaError, RateLimitError,
@@ -15,7 +17,8 @@ from ..contract import (
 
 
 _ROOT_LOCK = Lock()
-_root = None
+_roots = {}
+_project_pool = None
 
 
 def _sdk():
@@ -30,13 +33,41 @@ def _sdk():
     raise ConfigError("Install the Daytona extra: anycompute[daytona]")
 
 
-def _client(sdk):
-    global _root
+def _project_transport(client, api_url):
+    from urllib3 import PoolManager
+
+    global _project_pool
+    try:
+        pool = client._api_client.rest_client.pool_manager
+        endpoint, target = client._api_url, client._target
+    except AttributeError:
+        raise ConfigError("Daytona conformance requires the locked v0 transport") from None
+    if endpoint != api_url or target or not isinstance(pool, PoolManager):
+        raise ConfigError("Daytona conformance requires the standard v0 endpoint and target")
     with _ROOT_LOCK:
-        if _root is None:
-            _root = sdk.Daytona()
-        root = _root
-    return root.v0
+        if _project_pool is pool:
+            return
+        send = pool.request
+
+        def request(method, url, **kwargs):
+            if method == "POST":
+                kwargs.update(retries=False, redirect=False)
+            return send(method, url, **kwargs)
+
+        # Keep the guard on the owned pool even if the create waiter abandons its worker.
+        pool.request = request
+        _project_pool = pool
+
+
+def _client(sdk, *, project=False):
+    with _ROOT_LOCK:
+        root = _roots.get(project)
+        if root is None:
+            root = _roots[project] = sdk.Daytona()
+    client = root.v0
+    if project:
+        _project_transport(client, sdk.V0_API_URL)
+    return client
 
 
 def _retry_after(headers):
@@ -50,11 +81,11 @@ def _retry_after(headers):
     return None
 
 
-def _call(operation, action):
+def _call(operation, action, *, project=False):
     sdk, errors, _ = _sdk()
     error_type, details = ProviderError, {}
     try:
-        return action(_client(sdk), errors)
+        return action(_client(sdk, project=project), errors)
     except errors.DaytonaError as error:
         status = error.status_code
         if status in (402, 403, 409, 429) and "quota" in (error.code or error.message).lower():
@@ -84,19 +115,51 @@ class _Daytona:
     def __init__(self):
         self._sandbox = None
         self._session_id = None
+        self._project_snapshot_id = None
 
     def prepare(self, *, options: Mapping[str, object], timeout_s: float) -> None:
-        pass
+        if getenv("ANYCOMPUTE_CONFORMANCE_LIVE") != "1":
+            return
+        self._project_snapshot_id = None
+        if options:
+            raise ConfigError("Daytona conformance requires default options")
+        if getenv("DAYTONA_V0_API_URL") or getenv("DAYTONA_TARGET"):
+            raise ConfigError("Daytona conformance requires the standard v0 endpoint and target")
+        try:
+            locked = version("daytona") == "2.1.0" and version("daytona-api-client") == "0.233.0"
+        except PackageNotFoundError:
+            locked = False
+        if not locked:
+            raise ConfigError("Daytona conformance requires SDK 2.1.0 and API client 0.233.0")
+        sized = _call("verify snapshot", lambda client, _: client.snapshot.get("daytona-small"), project=True)
+        if (sized.name != "daytona-small" or sized.general is not True or sized.state != "active"
+                or sized.sandbox_class != "container" or (sized.cpu, sized.mem, sized.disk, sized.gpu) != (1, 1, 3, 0)
+                or not isinstance(sized.id, str)):
+            raise ProviderError("The active public daytona-small snapshot does not match conformance pricing")
+        try:
+            self._project_snapshot_id = str(UUID(sized.id))
+        except ValueError:
+            raise ProviderError("Daytona conformance requires a snapshot ID") from None
 
     def create(self, *, ttl: int, labels: Mapping[str, str], options: Mapping[str, object], timeout_s: float) -> str:
-        snapshot = options.get("snapshot", "daytona-small")
-        if not isinstance(snapshot, str) or not snapshot or any(char.isspace() or char == "\0" for char in snapshot):
-            raise ConfigError("Daytona snapshot must be a nonempty snapshot reference")
+        project = getenv("ANYCOMPUTE_CONFORMANCE_LIVE") == "1"
+        project_settings = {}
+        if project:
+            if options or type(ttl) is not int or ttl not in (60, 120):
+                raise ConfigError("Daytona conformance requires default options and a TTL of 60 or 120 seconds")
+            snapshot = self._project_snapshot_id
+            if snapshot is None:
+                raise ConfigError("Daytona conformance requires a verified snapshot before create")
+            project_settings = {"target": "us", "network_block_all": True}
+        else:
+            snapshot = options.get("snapshot", "daytona-small")
+            if not isinstance(snapshot, str) or not snapshot or any(char.isspace() or char == "\0" for char in snapshot):
+                raise ConfigError("Daytona snapshot must be a nonempty snapshot reference")
         _, _, create_params = _sdk()
         minutes = ttl // 60
         params = create_params(snapshot=snapshot, labels=dict(labels), ephemeral=True, ttl_minutes=minutes,
-                               auto_stop_interval=minutes, env_vars=options.get("environment"))
-        sandbox = _call("create", lambda client, _: client.create(params, timeout=timeout_s))
+                               auto_stop_interval=minutes, env_vars=options.get("environment"), **project_settings)
+        sandbox = _call("create", lambda client, _: client.create(params, timeout=timeout_s), project=project)
         sandbox_id = sandbox.id
         if not isinstance(sandbox_id, str) or not sandbox_id:
             raise ProviderError("Daytona create did not return a sandbox ID", sandbox_may_exist=True)

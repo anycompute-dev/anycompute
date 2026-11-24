@@ -1,7 +1,9 @@
+import asyncio
 import json
 import os
 import subprocess
 import sys
+from importlib.util import find_spec
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from urllib.parse import urlunsplit
@@ -15,6 +17,7 @@ from anycompute.providers import modal
 
 @pytest.fixture
 def sdk(monkeypatch):
+    monkeypatch.delenv("ANYCOMPUTE_CONFORMANCE_LIVE", raising=False)
     error = type("Error", (Exception,), {})
     subclasses = ("AuthError", "PermissionDeniedError", "ExecTimeoutError", "SandboxTimeoutError",
                   "SandboxTerminatedError", "ResourceExhaustedError", "InvalidError", "NotFoundError", "ServiceError",
@@ -22,11 +25,12 @@ def sdk(monkeypatch):
                   "SandboxFilesystemNotADirectoryError")
     errors = SimpleNamespace(Error=error, **{name: type(name, (error,), {}) for name in subclasses})
     client = SimpleNamespace(
+        __version__="1.6.4",
         exception=errors,
         App=SimpleNamespace(lookup=Mock(return_value=SimpleNamespace(app_id="ap-anycompute"))),
         Sandbox=SimpleNamespace(create=Mock(return_value=SimpleNamespace(object_id="sb-one")), from_id=Mock(),
                                 list=Mock()),
-        Image=SimpleNamespace(from_registry=Mock()),
+        Image=SimpleNamespace(from_registry=Mock(), from_name=Mock()),
         config=SimpleNamespace(config={"server_url": "https://api.modal.com,https://api.modal2.com"}),
     )
     monkeypatch.setattr(modal, "_sdk", lambda: client)
@@ -48,6 +52,123 @@ def test_create_uses_provider_ttl_and_tags_on_request_and_reuses_app(sdk):
                                           timeout=90, runtime="gvisor", image=sdk.Image.from_registry.return_value,
                                           env={"LANG": "C.UTF-8"})
     assert sdk.Sandbox.create.call_count == 2
+
+
+def test_conformance_prepares_named_image_and_caps_resources(sdk, monkeypatch):
+    monkeypatch.setenv("ANYCOMPUTE_CONFORMANCE_LIVE", "1")
+    sdk.config.config["max_throttle_wait"] = 0
+    adapter = modal._Modal()
+    adapter.prepare(options={}, timeout_s=210)
+    resolved = sdk.Image.from_name.return_value.hydrate
+    sdk.Image.from_name.assert_called_once_with("anycompute-conformance:v1")
+    resolved.assert_called_once_with()
+    sdk.App.lookup.assert_called_once_with("anycompute", create_if_missing=True)
+    sdk.Sandbox.create.assert_not_called()
+
+    assert adapter.create(ttl=90, labels=LABELS, options={}, timeout_s=210) == "sb-one"
+    sdk.Sandbox.create.assert_called_once_with(
+        "sleep", "infinity", app=sdk.App.lookup.return_value, tags=LABELS, timeout=90, runtime="gvisor",
+        image=resolved.return_value, cpu=(0.125, 1), memory=(128, 512), block_network=True,
+    )
+    assert sdk.Image.from_name.call_count == resolved.call_count == sdk.App.lookup.call_count == 1
+    sdk.Image.from_registry.assert_not_called()
+
+
+def test_conformance_create_requires_successful_preparation(sdk, monkeypatch):
+    monkeypatch.setenv("ANYCOMPUTE_CONFORMANCE_LIVE", "1")
+    sdk.config.config["max_throttle_wait"] = 0
+    adapter = modal._Modal()
+    with pytest.raises(ConfigError, match="prepared image and app"):
+        adapter.create(ttl=90, labels=LABELS, options={}, timeout_s=210)
+    sdk.Image.from_name.return_value.hydrate.side_effect = sdk.exception.NotFoundError("private response")
+    with pytest.raises(ProviderError, match="prepare conformance image and app") as error:
+        adapter.prepare(options={}, timeout_s=210)
+    assert not error.value.sandbox_may_exist and "private response" not in str(error.value)
+    with pytest.raises(ConfigError, match="prepared image and app"):
+        adapter.create(ttl=90, labels=LABELS, options={}, timeout_s=210)
+    sdk.App.lookup.assert_not_called()
+    sdk.Sandbox.create.assert_not_called()
+
+
+def test_conformance_create_rechecks_ttl_and_sdk_settings_after_preparation(sdk, monkeypatch):
+    monkeypatch.setenv("ANYCOMPUTE_CONFORMANCE_LIVE", "1")
+    sdk.config.config["max_throttle_wait"] = 0
+    adapter = modal._Modal()
+    adapter.prepare(options={}, timeout_s=210)
+    with pytest.raises(ConfigError, match="TTL between 1 and 120"):
+        adapter.create(ttl=121, labels=LABELS, options={}, timeout_s=210)
+    sdk.config.config["max_throttle_wait"] = 1
+    with pytest.raises(ConfigError, match="requires MODAL_MAX_THROTTLE_WAIT=0"):
+        adapter.create(ttl=90, labels=LABELS, options={}, timeout_s=210)
+    sdk.Sandbox.create.assert_not_called()
+
+
+def test_byok_prepare_is_a_noop(sdk):
+    modal._Modal().prepare(options={"image": "debian:12-slim"}, timeout_s=210)
+    sdk.Image.from_name.assert_not_called()
+    sdk.Image.from_registry.assert_not_called()
+    sdk.App.lookup.assert_not_called()
+
+
+@pytest.mark.parametrize(("version", "throttle_wait", "options", "reason"), [
+    ("1.6.5", 0, {}, "requires SDK 1.6.4"),
+    ("1.6.4", None, {}, "requires MODAL_MAX_THROTTLE_WAIT=0"),
+    ("1.6.4", 1, {}, "requires MODAL_MAX_THROTTLE_WAIT=0"),
+    ("1.6.4", "0", {}, "requires MODAL_MAX_THROTTLE_WAIT=0"),
+    ("1.6.4", 0, {"environment": {}}, "requires default provider options"),
+    ("1.6.4", 0, {"image": "debian:12-slim"}, "requires default provider options"),
+])
+def test_unbounded_conformance_prepare_stops_before_metadata(sdk, monkeypatch, version, throttle_wait, options, reason):
+    monkeypatch.setenv("ANYCOMPUTE_CONFORMANCE_LIVE", "1")
+    sdk.__version__ = version
+    if throttle_wait is not None:
+        sdk.config.config["max_throttle_wait"] = throttle_wait
+    with pytest.raises(ConfigError, match=reason):
+        modal._Modal().prepare(options=options, timeout_s=210)
+    sdk.Image.from_name.assert_not_called()
+    sdk.App.lookup.assert_not_called()
+    sdk.Sandbox.create.assert_not_called()
+
+
+def test_locked_modal_sdk_retry_bound_with_throttle_retries_disabled(monkeypatch, tmp_path):
+    monkeypatch.setenv("MODAL_CONFIG_PATH", str(tmp_path / "no-modal-config"))
+    monkeypatch.setenv("MODAL_MAX_THROTTLE_WAIT", "0")
+    if find_spec("modal") is None:
+        pytest.importorskip("modal")
+    import modal as sdk
+    from grpclib import GRPCError, Status
+    from modal._grpc_client import UnaryUnaryWrapper
+    from modal._utils import grpc_utils
+
+    assert sdk.__version__ == modal._CONFORMANCE_SDK_VERSION
+    assert sdk.config.config.get("max_throttle_wait") == 0
+
+    class CreateStub(UnaryUnaryWrapper):
+        name = "SandboxCreateV2"
+
+        def __init__(self, status):
+            self.status = status
+            self.calls = []
+
+        async def direct(self, request, *, timeout, metadata):
+            self.calls.append(dict(metadata))
+            raise GRPCError(self.status, "synthetic")
+
+    def unexpected_throttle_policy(_):
+        pytest.fail("Disabled throttle retries must not inspect server retry policies")
+
+    monkeypatch.setattr(grpc_utils, "get_server_retry_policy", unexpected_throttle_policy)
+    retry = grpc_utils.Retry(base_delay=0)
+
+    async def check():
+        for status, attempts in ((Status.INTERNAL, 4), (Status.RESOURCE_EXHAUSTED, 1)):
+            stub = CreateStub(status)
+            with pytest.raises(GRPCError):
+                await grpc_utils._retry_transient_errors(stub, None, retry=retry, metadata=None)
+            assert len(stub.calls) == attempts
+            assert len({call["x-idempotency-key"] for call in stub.calls}) == 1
+
+    asyncio.run(check())
 
 
 def test_invalid_image_fails_before_looking_up_app(sdk):

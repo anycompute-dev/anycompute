@@ -112,6 +112,7 @@ jobs:
         env: &provider_env
           ANYCOMPUTE_CONFORMANCE_LIVE: "1"
           ANYCOMPUTE_VERIFIED_ATTEMPT: ${{ needs.limit.outputs.verified_attempt }}
+          MODAL_MAX_THROTTLE_WAIT: "0"
           MODAL_TOKEN_ID: ${{ matrix.provider == 'modal' && secrets.MODAL_TOKEN_ID || '' }}
           MODAL_TOKEN_SECRET: ${{ matrix.provider == 'modal' && secrets.MODAL_TOKEN_SECRET || '' }}
           BOAT_API_KEY: ${{ matrix.provider == 'boat' && secrets.BOAT_API_KEY || '' }}
@@ -179,6 +180,7 @@ jobs:
           ANYCOMPUTE_VERIFIED_ATTEMPT: ${{ needs.limit.outputs.verified_attempt }}
           ANYCOMPUTE_VERIFIED_ADAPTERS: ${{ needs.limit.outputs.adapters }}
           ANYCOMPUTE_REPORT_SOURCE: project-run
+          MODAL_MAX_THROTTLE_WAIT: "0"
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
           BOAT_API_KEY: ${{ secrets.BOAT_API_KEY }}

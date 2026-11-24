@@ -12,13 +12,13 @@
 #   (effective_ttl + 120 s grace) x compute_usd_per_hour / 3600
 #   + start_fee_usd
 #   + stopped_storage_usd_per_week on partial-lifetime adapters (boat.dev, Daytona)
-# On an adapter whose create_retry cap is partial (Modal), it counts two sandboxes per create.
+# Modal allows four submissions per project create. Daytona allows one.
 #
-# Prices are for the size a create gets when it sets no size (the adapters never set one).
+# Modal and Daytona use their enforced project sizes. Other rates use default sizes.
 
 [modal]
-default_size = { value = "0.125 physical CPU core (0.25 vCPU), 128 MiB", source = "https://modal.com/docs/guide/sandbox-resources", checked = "2026-11-23" }
-compute_usd_per_hour = { value = 0.020741, source = "https://modal.com/pricing", checked = "2026-11-23", note = "Sandbox (non-preemptible) rates: $0.00003942 per core-second and $0.00000667 per GiB-second; 0.125 core and 0.125 GiB for 3600 s. Modal bills max(request, actual), so a sandbox that bursts costs more. No region multiplier, because the adapter sets no region." }
+default_size = { value = "Project requests 0.125 physical core and 128 MiB, capped at 1 physical core and 512 MiB", source = "https://modal.com/docs/guide/sandbox-resources", checked = "2026-11-24" }
+compute_usd_per_hour = { value = 0.2693565, source = "https://modal.com/pricing", checked = "2026-11-24", note = "1 core at $0.00003942/core-second plus 0.5 GiB at $0.00000667/GiB-second, times 3600 and the published maximum 1.75x region multiplier. Reserves the resource limits because billing uses max(request, actual). Project creates use a pre-published image, block guest networking, and use no custom disk or volumes." }
 start_fee_usd = { value = 0.0, source = "https://modal.com/pricing", checked = "2026-11-23", note = "No per-create fee is listed." }
 stopped_storage_usd_per_week = { value = 0.0, source = "https://modal.com/docs/guide/sandboxes", checked = "2026-11-23", note = "A finished Sandbox keeps no disk." }
 granularity_s = { value = 1, source = "https://modal.com/pricing", checked = "2026-11-23" }
@@ -35,8 +35,8 @@ min_charge_s = { value = 0, published = false, source = "https://docs.e2b.dev/bi
 plan_fee_usd_per_month = { value = 0.0, source = "https://docs.e2b.dev/billing.md", checked = "2026-11-23", note = "Hobby is $0 a month with a one-time $100 credit; Pro ($150 a month) adds no credit." }
 
 [daytona]
-default_size = { value = "1 vCPU, 1 GiB, 3 GiB disk", source = "https://www.daytona.io/docs/en/sandboxes.md", checked = "2026-11-23" }
-compute_usd_per_hour = { value = 0.0666, source = "https://www.daytona.io/pricing", checked = "2026-11-23", note = "$0.0504 per vCPU-hour plus $0.0162 per GiB-hour; the 3 GiB disk is inside the first 5 free GiB." }
+default_size = { value = "Verified daytona-small Linux container, 1 vCPU, 1 GiB memory, 3 GiB disk", source = "https://www.daytona.io/docs/en/linux-sandboxes/", checked = "2026-11-24" }
+compute_usd_per_hour = { value = 0.066924, source = "https://www.daytona.io/pricing", checked = "2026-11-24", note = "$0.0504 per vCPU-hour plus $0.0162 per GiB memory-hour plus 3 GiB at $0.000108 per GiB disk-hour. Reserves the full disk rate without assuming free allowance." }
 start_fee_usd = { value = 0.0, source = "https://www.daytona.io/docs/en/billing", checked = "2026-11-23", note = "No per-create fee; creating and starting are billed as running time." }
 stopped_storage_usd_per_week = { value = 0.0, source = "https://www.daytona.io/docs/en/billing", checked = "2026-11-23", note = "The adapter creates ephemeral sandboxes, which Daytona deletes on stop, so stopped billing does not apply." }
 granularity_s = { value = 1, source = "https://www.daytona.io/pricing", checked = "2026-11-23" }
