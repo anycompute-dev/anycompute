@@ -805,6 +805,7 @@ tests/conformance/prices.toml   # Next Step 1 price record: one table per provid
 .github/workflows/ci.yml        # unit tests on every pull request, Python 3.11 to 3.15, plus the full live conformance suite in a docker job (timeout-minutes: 30 on that job)
 .github/workflows/conformance.yml  # live tests: weekly (the live_run adapters other than docker) and manual dispatch (adapters as inputs); a keyless run-limit gate job, then keyed test jobs in a main-only protected environment, each with a pre-run gc sweep, a step timeout and an always() gc step (timeout-minutes: 90)
 .github/workflows/modal-account-check.yml  # manual main-only workspace authentication and named-image lookups using the conformance environment
+.github/workflows/cloud-account-check.yml  # manual main-only metadata checks for Boat, E2B, and Daytona using the conformance environment
 .github/workflows/release.yml   # on a v* tag: a build job, a publish job in the pypi environment (trusted publishing, signed release), then a $0 smoke run of the published package on docker
 ```
 
