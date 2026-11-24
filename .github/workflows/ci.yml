@@ -30,3 +30,28 @@ jobs:
           version: "0.9.18"
       - run: uv sync --locked --python "${{ matrix.python }}"
       - run: uv run --locked pytest
+
+  docker:
+    name: Docker conformance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      ANYCOMPUTE_CONFORMANCE_PROVIDER: docker
+      ANYCOMPUTE_RUN_ID: ${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: "0.9.18"
+      - run: uv sync --locked --python 3.12 --extra docker
+      - name: Pull the pinned Docker image
+        shell: bash
+        run: |
+          image=$(uv run --locked python -c 'from anycompute.providers.docker import DEFAULT_IMAGE; print(DEFAULT_IMAGE)')
+          docker pull "$image"
+      - run: uv run --locked pytest -q -m live_conformance tests/conformance

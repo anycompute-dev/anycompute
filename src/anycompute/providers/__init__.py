@@ -3,8 +3,9 @@
 from dataclasses import asdict
 
 from ..contract import ConfigError, ProviderSpec
+from .docker import SPEC as DOCKER_SPEC
 
-PROVIDERS: tuple[ProviderSpec, ...] = ()
+PROVIDERS: tuple[ProviderSpec, ...] = (DOCKER_SPEC,)
 
 
 def get_provider(name: str) -> ProviderSpec:
