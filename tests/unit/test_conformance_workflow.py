@@ -290,7 +290,7 @@ def test_workflow_keeps_the_history_gate_keyless_and_passes_only_its_matrix():
     assert "verified_attempt: ${{ steps.history.outputs.verified_attempt }}" in limit
     assert "REQUESTED_ADAPTERS: ${{ inputs.adapters }}" in limit
     assert "uv run --locked python -m tests.conformance.check_run_limit" in limit
-    assert limit.count("inputs.") == 1 and "inputs." not in cloud
+    assert limit.count("inputs.") == 2 and "inputs." not in cloud
     assert "needs: limit" in cloud and "environment: conformance" in cloud
     assert "github.ref == 'refs/heads/main'" in cloud
     assert "needs.limit.result == 'success'" in cloud
@@ -390,4 +390,79 @@ def test_cloud_always_cleanup_requires_verified_attempt_and_tries_only_three_lab
     assert result.stdout.splitlines() == [
         f"run --locked anycompute gc --provider boat --run={run_id} --json"
         for run_id in (parent, parent[:37] + "-lc", parent[:37] + "-kc")
+    ]
+
+
+def test_verify_dispatch_uses_the_same_counted_adapters(gate, history):
+    env, output = gate
+    env["REQUESTED_VERIFY"] = "1"
+    history[0].append(Reply(run()))
+    assert main(env) == 0
+    assert output.read_text() == 'verified_attempt=2\nadapters=["modal","boat"]\nverify=true\n'
+
+
+@pytest.mark.parametrize("provider", ["modal", "boat"])
+def test_verify_dispatch_refuses_when_either_provider_exceeds_its_count(gate, history, capsys, provider):
+    env, output = gate
+    env["REQUESTED_VERIFY"] = "1"
+    previous = [run(i, attempt=1, title=f"adapters={provider}") for i in range(1, 4)]
+    history[0].append(Reply(*previous, run()))
+    assert main(env) == 1
+    assert not output.exists()
+    assert f"{provider}: 5 extra runs exceed 4" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(("event", "adapters", "mode"), [
+    ("schedule", "", "1"),
+    ("workflow_dispatch", "modal", "1"),
+    ("workflow_dispatch", "boat,modal", "1"),
+    ("workflow_dispatch", "modal,boat", "arbitrary"),
+])
+def test_verify_gate_rejects_other_events_or_adapters_before_history(gate, history, event, adapters, mode):
+    env, output = gate
+    env.update(GITHUB_EVENT_NAME=event, REQUESTED_ADAPTERS=adapters, REQUESTED_VERIFY=mode)
+    assert main(env) == 1
+    assert not history[1]
+    assert not output.exists()
+
+
+def test_verify_job_replaces_the_provider_matrix_and_gates_access_to_both_secrets():
+    limit, cloud, verify = (job("conformance", name) for name in ("limit", "cloud", "verify"))
+    assert "verify: ${{ steps.history.outputs.verify }}" in limit
+    assert "needs.limit.outputs.verify != 'true'" in cloud
+    assert "needs: limit" in verify and "environment: conformance" in verify
+    assert "github.ref == 'refs/heads/main'" in verify and "github.event_name == 'workflow_dispatch'" in verify
+    assert "needs.limit.result == 'success'" in verify and "needs.limit.outputs.verify == 'true'" in verify
+    assert """needs.limit.outputs.adapters == '["modal","boat"]'""" in verify
+    assert "inputs." not in verify and "persist-credentials: false" in verify
+    assert "secrets." not in verify.split("      - name: Sweep and run the comparison", 1)[0]
+    attempt = step(verify, "Verify the counted attempt")
+    assert script(attempt) == script(step(cloud, "Verify the counted attempt"))
+    test_step = step(verify, "Sweep and run the comparison")
+    assert "steps.attempt.outcome == 'success'" in test_step
+    assert "ANYCOMPUTE_VERIFIED_ADAPTERS: ${{ needs.limit.outputs.adapters }}" in test_step
+    assert "ANYCOMPUTE_VERIFIED_ATTEMPT: ${{ needs.limit.outputs.verified_attempt }}" in test_step
+    assert set(re.findall(r"secrets\.(\w+)", test_step)) == {"MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET", "BOAT_API_KEY"}
+    assert "uv run --locked --no-sync python -m tests.conformance.verify_workload" in test_step
+    assert set(re.findall(r"uses: (\S+)", verify)) == set(re.findall(r"uses: (\S+)", cloud))
+
+
+@pytest.mark.parametrize("provider", ["modal", "boat"])
+def test_verify_cleanup_of_each_provider_runs_even_after_the_other_fails(provider):
+    verify = job("conformance", "verify")
+    modal_clean = step(verify, "Clean up the Modal run")
+    boat_clean = step(verify, "Clean up the boat.dev run")
+    for cleanup in (modal_clean, boat_clean):
+        assert "always() && steps.attempt.outcome == 'success' && steps.install.outcome == 'success'" in cleanup
+        assert "timeout-minutes: 20" in cleanup
+    assert "secrets.BOAT_API_KEY" not in modal_clean and "secrets.MODAL_TOKEN" not in boat_clean
+    assert "run: *verify_cleanup" in boat_clean
+    command = dedent(modal_clean.split("        run: &verify_cleanup |\n", 1)[1])
+    fake_uv = r'''uv() { printf '%s\n' "$*"; [[ "$*" != *-lc* ]]; }'''
+    run_id = "1234567890" * 4
+    result = bash(fake_uv + "\n" + command, PROVIDER=provider, ANYCOMPUTE_RUN_ID=run_id)
+    assert result.returncode == 1
+    assert result.stdout.splitlines() == [
+        f"run --locked --no-sync anycompute gc --provider {provider} --run={label} --json"
+        for label in (run_id, run_id[:37] + "-lc", run_id[:37] + "-kc")
     ]

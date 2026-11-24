@@ -10,6 +10,10 @@ on:
         description: Comma-separated enabled cloud adapters, with no spaces
         required: true
         type: string
+      verify:
+        description: Compare the fixed workload once on modal,boat
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -27,6 +31,7 @@ jobs:
     outputs:
       adapters: ${{ steps.history.outputs.adapters }}
       verified_attempt: ${{ steps.history.outputs.verified_attempt }}
+      verify: ${{ steps.history.outputs.verify }}
     steps:
       - name: Check out public code
         shell: bash
@@ -53,6 +58,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           REQUESTED_ADAPTERS: ${{ inputs.adapters }}
+          REQUESTED_VERIFY: ${{ inputs.verify && '1' || '0' }}
         run: uv run --locked python -m tests.conformance.check_run_limit
 
   cloud:
@@ -61,7 +67,7 @@ jobs:
     if: >-
       ${{ github.ref == 'refs/heads/main' && needs.limit.result == 'success' &&
           (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
-          needs.limit.outputs.adapters != '' && needs.limit.outputs.adapters != '[]' }}
+          needs.limit.outputs.verify != 'true' && needs.limit.outputs.adapters != '' && needs.limit.outputs.adapters != '[]' }}
     environment: conformance
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -125,3 +131,77 @@ jobs:
             uv run --locked anycompute gc --provider "$ANYCOMPUTE_CONFORMANCE_PROVIDER" --run="$run_id" --json || status=1
           done
           exit "$status"
+
+  verify:
+    name: Compare one workload on Modal and boat.dev
+    needs: limit
+    if: >-
+      ${{ github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' &&
+          needs.limit.result == 'success' && needs.limit.outputs.verify == 'true' &&
+          needs.limit.outputs.adapters == '["modal","boat"]' }}
+    environment: conformance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      ANYCOMPUTE_RUN_ID: ${{ github.run_id }}
+    steps:
+      - name: Verify the counted attempt
+        id: attempt
+        shell: bash
+        env:
+          VERIFIED_ATTEMPT: ${{ needs.limit.outputs.verified_attempt }}
+        run: |
+          if [[ "$GITHUB_REF" != refs/heads/main || -z "$VERIFIED_ATTEMPT" || "$GITHUB_RUN_ATTEMPT" != "$VERIFIED_ATTEMPT" ]]; then
+            printf '%s\n' 'This attempt was not counted on main. Re-run all jobs on main.' >&2
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: "0.9.18"
+          enable-cache: false
+      - name: Install both adapters
+        id: install
+        timeout-minutes: 5
+        run: uv sync --locked --python 3.12 --extra modal --extra boat
+      - name: Sweep and run the comparison
+        if: ${{ steps.attempt.outcome == 'success' }}
+        timeout-minutes: 35
+        env:
+          ANYCOMPUTE_CONFORMANCE_LIVE: "1"
+          ANYCOMPUTE_VERIFIED_ATTEMPT: ${{ needs.limit.outputs.verified_attempt }}
+          ANYCOMPUTE_VERIFIED_ADAPTERS: ${{ needs.limit.outputs.adapters }}
+          ANYCOMPUTE_REPORT_SOURCE: project-run
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+          BOAT_API_KEY: ${{ secrets.BOAT_API_KEY }}
+        run: uv run --locked --no-sync python -m tests.conformance.verify_workload
+      - name: Clean up the Modal run
+        if: ${{ always() && steps.attempt.outcome == 'success' && steps.install.outcome == 'success' }}
+        shell: bash
+        timeout-minutes: 20
+        env:
+          PROVIDER: modal
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: &verify_cleanup |
+          status=0
+          for run_id in "$ANYCOMPUTE_RUN_ID" "${ANYCOMPUTE_RUN_ID:0:37}-lc" "${ANYCOMPUTE_RUN_ID:0:37}-kc"; do
+            uv run --locked --no-sync anycompute gc --provider "$PROVIDER" --run="$run_id" --json || status=1
+          done
+          exit "$status"
+      - name: Clean up the boat.dev run
+        if: ${{ always() && steps.attempt.outcome == 'success' && steps.install.outcome == 'success' }}
+        shell: bash
+        timeout-minutes: 20
+        env:
+          PROVIDER: boat
+          BOAT_API_KEY: ${{ secrets.BOAT_API_KEY }}
+        run: *verify_cleanup

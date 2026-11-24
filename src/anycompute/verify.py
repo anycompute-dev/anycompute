@@ -104,6 +104,9 @@ def _run_one(task, spec, run_id, ctx, check_lifecycle):
     seconds = result.sandbox_seconds if result else getattr(error, "sandbox_seconds", None)
     row = {
         "provider": ctx.redact(name),
+        "sandbox_id": ctx.redact(result.sandbox_id) if result else None,
+        "run_id": ctx.redact(result.run_id) if result else None,
+        "effective_ttl": result.effective_ttl if result else None,
         "exit_code": "pass" if result and result.exit_code == task.exit_code else "fail",
         "output": "pass",
         "files": "pass",

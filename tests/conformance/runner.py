@@ -21,6 +21,7 @@ from anycompute.lifecycle import _LifecycleResult, _child_run_id, _kill_client, 
 
 MAX_CREATES = 15
 MAX_TTL_S = 120
+VERIFY_ADAPTERS = ("modal", "boat")
 GRACE_S = engine._GRACE_S
 TEST_TIMEOUT_S = 540
 BUDGET_USD = Decimal("2")

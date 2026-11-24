@@ -12,7 +12,7 @@ import sys
 from urllib.parse import urlencode
 
 from anycompute import providers
-from tests.conformance.runner import RunLimitError, check_run_limit
+from tests.conformance.runner import VERIFY_ADAPTERS, RunLimitError, check_run_limit
 
 _MAX_PAGE_BYTES = 8 * 1024 * 1024
 
@@ -74,6 +74,12 @@ def main(env: Mapping[str, str] = os.environ, *, now: datetime | None = None) ->
         else:
             raise RunLimitError("Unsupported conformance workflow event")
 
+        verify = env.get("REQUESTED_VERIFY", "0")
+        if verify not in ("0", "1") or verify == "1" and (
+            event != "workflow_dispatch" or tuple(selected) != VERIFY_ADAPTERS
+        ):
+            raise RunLimitError("Verify requires a manual dispatch naming modal,boat in that order")
+
         pages: list[bytes] = []
 
         def fetch_page(month: datetime, page: int, per_page: int) -> tuple[int, bytes]:
@@ -98,6 +104,8 @@ def main(env: Mapping[str, str] = os.environ, *, now: datetime | None = None) ->
         matrix = json.dumps(selected, separators=(",", ":"))
         with open(output_path, "a", encoding="utf-8") as output:
             output.write(f"verified_attempt={counted}\nadapters={matrix}\n")
+            if verify == "1":
+                output.write("verify=true\n")
         if not selected:
             print("No cloud adapters are enabled; no conformance tests ran.")
         return 0
