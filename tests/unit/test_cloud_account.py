@@ -51,6 +51,18 @@ def test_e2b_checks_the_published_base_resources_only(monkeypatch, memory, statu
     }
 
 
+@pytest.mark.parametrize(("templates", "exit_code"), [
+    ([{"names": ["base"], "cpuCount": 2, "memoryMB": 512}], 0),
+    ([{"names": ["base"], "cpuCount": 2, "memoryMB": 8192}], 1),
+    ([], 1),
+])
+def test_e2b_trial_requires_verified_base_resources(monkeypatch, templates, exit_code):
+    monkeypatch.setattr(sys, "argv", ["account-check", "e2b", "--require-e2b-base-size"])
+    monkeypatch.setenv("E2B_API_KEY", "synthetic")
+    monkeypatch.setattr(cloud_account, "_metadata", lambda provider, key: (200, templates))
+    assert cloud_account.main() == exit_code
+
+
 @pytest.mark.parametrize(("target", "warm_pool_status"), [
     ("us", "present"),
     ("eu", "absent"),

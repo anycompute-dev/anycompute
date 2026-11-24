@@ -38,6 +38,7 @@ def registry(monkeypatch):
         ProviderSpec("docker", ProviderCaps(), _unavailable),
         ProviderSpec("modal", ProviderCaps(live_run=True), _unavailable),
         ProviderSpec("boat", ProviderCaps(), _unavailable),
+        ProviderSpec("e2b", ProviderCaps(), _unavailable),
     )
     monkeypatch.setattr(providers, "PROVIDERS", specs)
     return specs
@@ -77,6 +78,17 @@ def test_selects_only_opted_in_docker_or_counted_live_adapter(registry):
     assert select_provider(_OPTED_IN) is registry[1]
     with pytest.raises(ValueError, match="attempt"):
         select_provider(_OPTED_IN | {"GITHUB_RUN_ATTEMPT": "0", "ANYCOMPUTE_VERIFIED_ATTEMPT": "0"})
+
+
+def test_selects_e2b_trial_only_for_a_counted_manual_dispatch(registry):
+    from tests.conformance.runner import select_provider
+
+    env = _OPTED_IN | {"ANYCOMPUTE_CONFORMANCE_PROVIDER": "e2b", "GITHUB_EVENT_NAME": "workflow_dispatch"}
+    assert select_provider(env) is registry[3]
+    with pytest.raises(ValueError, match="not enabled"):
+        select_provider(env | {"GITHUB_EVENT_NAME": "schedule"})
+    with pytest.raises(ValueError, match="attempt"):
+        select_provider(env | {"ANYCOMPUTE_VERIFIED_ATTEMPT": "1"})
 
 
 def test_fixture_run_id_uses_exact_env_or_one_generated_id(registry, monkeypatch):
