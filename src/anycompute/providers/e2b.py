@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+from importlib.metadata import version
 from shlex import join
 
 from ..contract import (
@@ -48,7 +49,7 @@ def _attach(sdk, sandbox_id, timeout_s):
     from e2b.api.client_sync import get_api_client
     from packaging.version import Version
 
-    config = sdk.ConnectionConfig(debug=False, retries=0, request_timeout=timeout_s)
+    config = sdk.ConnectionConfig(**_options(timeout_s))
     with get_api_client(config) as client:
         response = get_sandboxes_sandbox_id.sync_detailed(sandbox_id, client=client)
     if response.status_code == 404:
@@ -71,13 +72,13 @@ def _attach(sdk, sandbox_id, timeout_s):
     return sdk.Sandbox(
         sandbox_id=sandbox_id, sandbox_domain=detail.domain if isinstance(detail.domain, str) else None,
         envd_version=Version(detail.envd_version), envd_access_token=token,
-        connection_config=sdk.ConnectionConfig(debug=False, retries=0, request_timeout=timeout_s,
-                                               extra_sandbox_headers=headers),
+        connection_config=sdk.ConnectionConfig(**_options(timeout_s), extra_sandbox_headers=headers),
     )
 
 
 def _options(timeout_s):
-    return {"debug": False, "retries": 0, "request_timeout": timeout_s}
+    return {"debug": False, "retries": 0, "request_timeout": timeout_s,
+            "api_headers": {"User-Agent": f"anycompute/{version('anycompute')}"}}
 
 
 class _E2B:

@@ -42,7 +42,7 @@ Use `anycompute verify task.toml --providers modal,boat` to compare one task acr
 
 The provider receives the command and arguments you run, input file paths and contents, output paths you ask to read, and any supported image, template, snapshot, or environment options you supply. Cloud SDKs authenticate with your provider credentials. Any environment values you pass to the workload are visible to that provider.
 
-Every create sends three labels: `anycompute=1`, `anycompute-run` with the run ID, and `anycompute-ttl` with the effective TTL in seconds. The adapter also sends the TTL in the provider's format. Anycompute uses the labels to find its own sandboxes and sends sandbox IDs to read, query, terminate, or delete them. It sets the User-Agent `anycompute/<version>` on the Boat client. Other clients use their SDK's identification.
+Every create sends three labels: `anycompute=1`, `anycompute-run` with the run ID, and `anycompute-ttl` with the effective TTL in seconds. The adapter also sends the TTL in the provider's format. Anycompute uses the labels to find its own sandboxes and sends sandbox IDs to read, query, terminate, or delete them. The boat.dev and E2B clients send the User-Agent `anycompute/<version>`, as does Docker after its initial API version lookup. Modal, Daytona, and that initial Docker lookup use their SDK's identification.
 
 Anycompute runs `mkdir -p /tmp/anycompute` and creates the parent directories of nested input and write paths. When it collects runtime information, it runs `python3 --version` and `uname -m` in the sandbox. `verify --lifecycle` also starts a separate sandbox and runs `sh -c 'touch ready; while :; do :; done'` under a child run ID so it can observe expiry after killing the local client.
 

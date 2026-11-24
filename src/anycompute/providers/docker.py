@@ -6,6 +6,7 @@ import posixpath
 import tarfile
 from collections.abc import Mapping, Sequence
 from contextlib import closing
+from importlib.metadata import version
 
 from ..contract import (
     AuthError, ConfigError, InvalidPathError, ProviderCaps, ProviderError, ProviderSpec, RateLimitError, RawExecResult,
@@ -54,6 +55,8 @@ class _Docker:
                 client = None
             if client is None:
                 raise ProviderError("Cannot reach the Docker daemon; check that it is running and the context is correct")
+            # from_env negotiates the API version before returning the configured session.
+            client.api.headers["User-Agent"] = f"anycompute/{version('anycompute')}"
             # Requests can replay a POST when following a 307/308 redirect.
             client.api.max_redirects = 0
             self._client = client

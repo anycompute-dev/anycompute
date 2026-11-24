@@ -6,6 +6,8 @@ Before merge, all five GitHub Linux jobs must pass on the pull request's candida
 
 The Python 3.12 GitHub job installs the locked Modal and Daytona SDKs. Run `uv run --locked --extra modal --extra daytona pytest -q` to exercise their request limits with fake transports.
 
+Store any recorded provider fixtures as UTF-8 JSON under `tests/fixtures/`. The fixture test rejects credential fields, authentication headers, and known provider token formats. Use synthetic Python fakes for authentication cases.
+
 Run `uv run --locked --extra docker pytest -q` to include the Docker SDK transport tests. These tests use a fake transport and do not contact a daemon.
 
 For the live Docker suite, start a local Linux-container daemon. Run `ANYCOMPUTE_CONFORMANCE_PROVIDER=docker uv run --locked --extra docker pytest -q -m live_conformance tests/conformance`. The marker selects the suite. The provider variable allows the suite to run. This suite creates and removes labeled containers with the pinned image. The lifetime tests wait for the actual TTL.
@@ -42,6 +44,8 @@ docker run --rm --pull never --platform linux/amd64 --network none anycompute-co
 When publishing is authorized, use Modal's `image pull` with the verified registry digest and the name `anycompute-conformance:v1` in the CI token's Modal environment. Record the registry digest and Modal image ID because a named Modal tag can be updated. [Modal CLI](https://modal.com/docs/cli/latest/image#modal-image-pull) · [Named images](https://modal.com/docs/guide/named-images)
 
 ## Protected cloud conformance
+
+The manual **Modal account check** workflow on `main` uses the protected `conformance` secrets to check workspace authentication and look up `anycompute-conformance:v1`. It reports fixed status messages and uses metadata lookups only. Confirm the active workspace usage cap separately in Modal Usage & Billing. [Workspace API](https://modal.com/docs/sdk/py/latest/Workspace) · [Modal budgets](https://modal.com/docs/guide/budgets)
 
 The protected `Conformance` workflow can compare one fixed workload on Modal and boat.dev. Set `adapters` to `modal,boat` and enable `verify` on a manual main-branch dispatch after both adapters are enabled and their credentials are configured. The comparison job records its JSON report in the step log.
 

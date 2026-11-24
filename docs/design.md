@@ -88,6 +88,7 @@ The standard Python logger `anycompute` writes one DEBUG line per step (validate
 - These rules cover the project's own runs: CI (the only place live runs on the project's accounts happen; see Run limit) and the public report. A user's runs on the user's own account are the user's business.
 - Every adapter's fixtures, live or not, come from the provider's published API reference, OpenAPI file, or SDK source and its own test fixtures. The project captures no fixture from live calls on its own accounts. A contributor's recording from the contributor's own account is accepted when the pull request says so. The capability table and the README label an adapter that does not run live "not run live".
 - A fixture key-scan unit test fails on any fixture with an `Authorization`, `X-API-Key` or cookie header, a key-like field, or a known key prefix.
+- Recorded provider fixtures are UTF-8 JSON under `tests/fixtures/`. Python transport fakes keep synthetic authentication values in test code.
 - docker needs no provider account. It costs $0 and is exempt from the spend runner's run limit.
 
 ### Never test or probe a provider's systems
@@ -803,6 +804,7 @@ tests/conformance/runner.py     # the spend runner: reservation per CLI launch, 
 tests/conformance/prices.toml   # Next Step 1 price record: one table per provider, each value with its source URL and checked date
 .github/workflows/ci.yml        # unit tests on every pull request, Python 3.11 to 3.15, plus the full live conformance suite in a docker job (timeout-minutes: 30 on that job)
 .github/workflows/conformance.yml  # live tests: weekly (the live_run adapters other than docker) and manual dispatch (adapters as inputs); a keyless run-limit gate job, then keyed test jobs in a main-only protected environment, each with a pre-run gc sweep, a step timeout and an always() gc step (timeout-minutes: 90)
+.github/workflows/modal-account-check.yml  # manual main-only workspace authentication and named-image lookups using the conformance environment
 .github/workflows/release.yml   # on a v* tag: a build job, a publish job in the pypi environment (trusted publishing, signed release), then a $0 smoke run of the published package on docker
 ```
 
