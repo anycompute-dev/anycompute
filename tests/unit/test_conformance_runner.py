@@ -200,12 +200,31 @@ def test_runner_reserves_for_partial_retry_by_caps(start_runner):
     assert suite.reservation.sandboxes == 2
 
 
-def test_lifetime_observer_checks_active_sandbox_before_cli_timeout_report(start_runner):
-    suite, transport, _ = start_runner()
+@pytest.mark.parametrize("lifetime", ["hard", "partial"])
+def test_lifetime_observer_checks_active_sandbox_and_times_confirmed_deletion(start_runner, monkeypatch, lifetime):
+    suite, transport, clock = start_runner(caps=ProviderCaps(lifetime=lifetime))
+    state = transport.state
+
+    def observe(sandbox, timeout):
+        result = state(sandbox, timeout)
+        if lifetime == "partial" and result == SandboxState.GONE:
+            if transport.latest_process.poll() is None:
+                return SandboxState.STOPPED
+            clock.sleep(2)
+        return result
+
+    monkeypatch.setattr(transport, "state", observe)
     code, report, expiry = suite.lifetime()
     assert code == 123 and report["error"]["type"] == "SandboxTimeoutError"
-    assert (expiry.sandbox_id, expiry.status, expiry.elapsed_s) == ("expiring-box", "pass", 1)
-    assert transport.state_calls == [("expiring-box", 240, None), ("expiring-box", 239, None)]
+    assert expiry.sandbox_id == "expiring-box"
+    assert expiry.elapsed_s == 1
+    expected_calls = [("expiring-box", 240, None), ("expiring-box", 239, None)]
+    if lifetime == "hard":
+        assert (expiry.status, expiry.deleted_elapsed_s) == ("pass", 1)
+    else:
+        assert (expiry.status, expiry.deleted_elapsed_s) == ("partial", 3)
+        expected_calls.append(("expiring-box", 120, 123))
+    assert transport.state_calls == expected_calls
     assert suite.reservation.sandboxes == 1 and not suite.stopped
 
 

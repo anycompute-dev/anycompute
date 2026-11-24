@@ -54,4 +54,16 @@ jobs:
         run: |
           image=$(uv run --locked python -c 'from anycompute.providers.docker import DEFAULT_IMAGE; print(DEFAULT_IMAGE)')
           docker pull "$image"
-      - run: uv run --locked pytest -q -m live_conformance tests/conformance
+      - name: Run Docker conformance
+        id: suite
+        env:
+          ANYCOMPUTE_REPORT_SOURCE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'project-run' || 'user-run' }}
+          ANYCOMPUTE_CONFORMANCE_REPORT: ${{ runner.temp }}/conformance-report.json
+        run: uv run --locked pytest -q -m live_conformance tests/conformance
+      - name: Upload the conformance report
+        if: ${{ !cancelled() && (steps.suite.outcome == 'success' || steps.suite.outcome == 'failure') }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: conformance-docker-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/conformance-report.json
+          if-no-files-found: ${{ steps.suite.outcome == 'success' && 'error' || 'ignore' }}

@@ -10,7 +10,9 @@ Run `uv run --locked --extra docker pytest -q` to include the Docker SDK transpo
 
 For the live Docker suite, start a local Linux-container daemon. Run `ANYCOMPUTE_CONFORMANCE_PROVIDER=docker uv run --locked --extra docker pytest -q -m live_conformance tests/conformance`. The marker selects the suite. The provider variable allows the suite to run. This suite creates and removes labeled containers with the pinned image. The lifetime tests wait for the actual TTL.
 
-Run `uv build` to build the source distribution and wheel. This command does not publish either file.
+To write a local conformance report, set `ANYCOMPUTE_CONFORMANCE_REPORT` to a JSON file path in an existing directory. A result records the source, package and provider SDK versions, suite version with the checkout SHA, and each selected rule's verdict. Lifecycle observations measure elapsed seconds from client launch. Other cleanup timings use the CLI's elapsed time from create request to confirmed deletion. A missing measurement is `null`. CI uploads the test report as `conformance-<provider>-<attempt>` after the tests finish. The workflow status also accounts for setup and the final cleanup sweep.
+
+Run `uv build --no-sources` to build the source distribution and wheel locally. To rehearse the release smoke test, install the built wheel with the Docker extra into a fresh virtual environment and use that environment's Python to run `tests/release_smoke.py` against your local Docker daemon.
 
 ## Prepare the Modal image locally
 

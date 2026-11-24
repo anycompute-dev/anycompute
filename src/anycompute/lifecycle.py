@@ -23,6 +23,7 @@ class _LifecycleResult:
     status: Literal["pass", "partial", "fail"]
     elapsed_s: float
     reason: str | None = None
+    deleted_elapsed_s: float | None = None
 
 
 def _child_run_id(parent: str, suffix: Literal["-kc", "-lc"]) -> str:
@@ -147,8 +148,7 @@ def _kill_client(parent: str, *, effective_ttl: int, lifetime: Literal["hard", "
         state = _wait_for_end(observer, sandbox_id, lifetime, clock=clock, deadline=expiry_deadline)
         if state is None:
             return _LifecycleResult(run_id, sandbox_id, "fail", clock.now() - start, "sandbox did not end by TTL plus grace")
-        return _LifecycleResult(run_id, sandbox_id, "partial" if state == SandboxState.STOPPED else "pass",
-                                clock.now() - start)
+        ended = clock.now() - start
     finally:
         try:
             if child is not None and child.poll() is None:
@@ -164,3 +164,6 @@ def _kill_client(parent: str, *, effective_ttl: int, lifetime: Literal["hard", "
                 if not confirmed:
                     raise CleanupError("Could not confirm lifecycle sandbox deletion",
                                        sandbox_id=sandbox_id, run_id=run_id)
+    partial = state == SandboxState.STOPPED
+    return _LifecycleResult(run_id, sandbox_id, "partial" if partial else "pass", ended,
+                            deleted_elapsed_s=clock.now() - start if partial else ended)

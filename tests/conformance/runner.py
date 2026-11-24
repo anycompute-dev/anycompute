@@ -3,7 +3,7 @@
 from collections import Counter
 from collections.abc import Callable, Collection, Mapping, Sequence
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from decimal import Context, Decimal, ROUND_CEILING, localcontext
 from functools import partial
@@ -440,10 +440,13 @@ class ConformanceRunner:
             if sandbox_id:
                 self._record((sandbox_id,))
             self._scan(min(clock.now() + engine._CLEANUP_S, start + TEST_TIMEOUT_S - 5))
-            return code, report, expiry
         except BaseException as error:
             _discard_process(child)
             self._abort(error)
+        if expiry is not None and expiry.status == "partial":
+            self.confirm_deleted(expiry.sandbox_id)
+            expiry = replace(expiry, deleted_elapsed_s=clock.now() - start)
+        return code, report, expiry
 
     def _observe_lifetime(self, child, start, ttl):
         clock = self._ctx.clock
@@ -462,7 +465,9 @@ class ConformanceRunner:
         elapsed = clock.now() - start
         if state is None:
             return _LifecycleResult(self.run_id, sandbox, "fail", elapsed, "sandbox did not end by TTL plus grace")
-        return _LifecycleResult(self.run_id, sandbox, "partial" if state == SandboxState.STOPPED else "pass", elapsed)
+        if state == SandboxState.STOPPED:
+            return _LifecycleResult(self.run_id, sandbox, "partial", elapsed)
+        return _LifecycleResult(self.run_id, sandbox, "pass", elapsed, deleted_elapsed_s=elapsed)
 
     def confirm_deleted(self, sandbox_id):
         try:

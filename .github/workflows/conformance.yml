@@ -106,6 +106,7 @@ jobs:
         timeout-minutes: 5
         run: uv sync --locked --python 3.12 --extra "$ANYCOMPUTE_CONFORMANCE_PROVIDER"
       - name: Sweep and run conformance
+        id: suite
         if: ${{ steps.attempt.outcome == 'success' }}
         shell: bash
         timeout-minutes: 60
@@ -120,7 +121,8 @@ jobs:
           DAYTONA_API_KEY: ${{ matrix.provider == 'daytona' && secrets.DAYTONA_API_KEY || '' }}
         run: |
           uv run --locked anycompute gc --all --provider "$ANYCOMPUTE_CONFORMANCE_PROVIDER" --json
-          uv run --locked pytest -q -m live_conformance tests/conformance
+          ANYCOMPUTE_REPORT_SOURCE=project-run ANYCOMPUTE_CONFORMANCE_REPORT="$RUNNER_TEMP/conformance-report.json" \
+            uv run --locked pytest -q -m live_conformance tests/conformance
       - name: Clean up this run
         if: ${{ always() && steps.attempt.outcome == 'success' && steps.install.outcome == 'success' }}
         shell: bash
@@ -132,6 +134,13 @@ jobs:
             uv run --locked anycompute gc --provider "$ANYCOMPUTE_CONFORMANCE_PROVIDER" --run="$run_id" --json || status=1
           done
           exit "$status"
+      - name: Upload the conformance report
+        if: ${{ !cancelled() && (steps.suite.outcome == 'success' || steps.suite.outcome == 'failure') }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: conformance-${{ matrix.provider }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/conformance-report.json
+          if-no-files-found: ${{ steps.suite.outcome == 'success' && 'error' || 'ignore' }}
 
   verify:
     name: Compare one workload on Modal and boat.dev
