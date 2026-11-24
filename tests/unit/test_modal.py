@@ -1,4 +1,6 @@
+import json
 import os
+import subprocess
 import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -144,9 +146,13 @@ def test_list_drains_every_page_with_app_and_label_filter(sdk):
     sdk.Sandbox.list.assert_called_once_with(app_id="ap-anycompute", tags={"anycompute": "1"})
 
 
-def test_runtime_host_omits_userinfo(sdk):
-    sdk.config.config["server_url"] = "https://private-key:private-secret@api.modal.com, https://api.modal2.com"
-    assert modal._Modal().api_host(timeout_s=120) == "api.modal.com,api.modal2.com"
+@pytest.mark.parametrize(("configured", "reported"), [
+    ("https://private-key:private-secret@api.modal.com/control?token=opaque", "https://api.modal.com"),
+    ("https://api.modal.com, https://api.modal2.com", "unknown"),
+])
+def test_runtime_host_reports_one_endpoint_without_userinfo(sdk, configured, reported):
+    sdk.config.config["server_url"] = configured
+    assert engine._runtime_host(modal._Modal().api_host(timeout_s=120)) == reported
 
 
 def test_profile_keys_redact_even_when_inactive(tmp_path, monkeypatch):
@@ -186,3 +192,15 @@ def test_run_reports_provider_expiry_and_confirms_cleanup(sdk, monkeypatch):
     assert raised.value.sandbox_id == "sb-one"
     assert raised.value.sandbox_seconds is not None
     sandbox.terminate.assert_called_once_with(wait=False)
+
+
+def test_cli_reports_modal_as_excluded_and_redacts_configured_credentials(tmp_path, monkeypatch):
+    config = tmp_path / "modal.toml"
+    config.write_text('[inactive]\noauth_client_secret = "synthetic-oauth-secret"\n')
+    monkeypatch.setenv("MODAL_CONFIG_PATH", os.fspath(config))
+    result = subprocess.run([sys.executable, "-m", "anycompute", "providers", "--json"],
+                            capture_output=True, text=True, check=True)
+    assert "synthetic-oauth-secret" not in result.stdout
+    row = next(row for row in json.loads(result.stdout)["providers"] if row["provider"] == "modal")
+    assert row["live_run"] is False
+    assert row["keys"]["~/.modal.toml:*.oauth_client_secret"] == "set"

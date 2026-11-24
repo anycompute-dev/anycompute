@@ -711,7 +711,7 @@ Official `modal` Python SDK 1.x, starting at 1.6.4. See the [Sandbox API](https:
 - Its gRPC retries cannot be turned off, so `create_retry` and `exec_retry` are `partial`.
 - Its `key_sources` cover the SDK token and OAuth environment variables and the corresponding fields in every profile in the config file. The config file is the file at `MODAL_CONFIG_PATH` when it is set, else `~/.modal.toml`. A unit test checks that the engine redacts a key in a non-default profile of a `MODAL_CONFIG_PATH` file.
 - Its unit tests stub the SDK exceptions. The SDK uses `ResourceExhaustedError` for both quotas and rate limits, so the adapter maps an explicit quota or rate-limit message and reports other cases as `ProviderError`.
-- It is the first live cloud adapter.
+- Modal is the first cloud adapter planned for live conformance. The runner reserves for two allocations per create. The SDK reuses an idempotency key across retries. Exclude Modal from scheduled and manual runs until the project can verify or enforce the allocation bound.
 
 ### E2B
 

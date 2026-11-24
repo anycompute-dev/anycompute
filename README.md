@@ -8,7 +8,7 @@ anycompute is an open-source Python SDK and CLI. One call or one command runs a 
 
 Early development. No release is available yet, so do not depend on the API. The v0.1 design is in [docs/design.md](docs/design.md), and deferred work is in [TODOS.md](TODOS.md).
 
-The CLI has `run`, `gc`, and `providers`. Docker and Modal adapters are available. The logic tests use fakes, and the Docker conformance suite uses a local Linux container daemon. Modal is awaiting its first live conformance run.
+The CLI has `run`, `gc`, and `providers`. Docker and Modal adapters are available. The logic tests use fakes, and the Docker conformance suite uses a local Linux container daemon. Modal live conformance is disabled pending verification of the retry allocation limit.
 
 See [TESTING.md](TESTING.md) for keyless checks and [CLAUDE.md](CLAUDE.md) for repository rules.
 

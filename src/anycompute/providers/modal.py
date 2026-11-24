@@ -3,7 +3,6 @@
 import asyncio
 from collections.abc import Mapping, Sequence
 from threading import Lock
-from urllib.parse import urlsplit
 
 from ..contract import (
     AuthError, ConfigError, ConfigKeys, KeySources, ProviderCaps, ProviderError, ProviderSpec, QuotaError,
@@ -175,7 +174,7 @@ class _Modal:
 
     def api_host(self, *, timeout_s: float) -> str | None:
         urls = _sdk().config.config["server_url"]
-        return ",".join(host for url in urls.split(",") if (host := urlsplit(url.strip()).hostname)) or None
+        return None if "," in urls else urls.strip()
 
 
 SPEC = ProviderSpec(
@@ -192,7 +191,6 @@ SPEC = ProviderSpec(
             env=tuple(f"MODAL_{key.upper()}" for key in _AUTH_FIELDS),
             config=(ConfigKeys("~/.modal.toml", tuple(("*", key) for key in _AUTH_FIELDS), "MODAL_CONFIG_PATH"),),
         ),
-        live_run=True,
     ),
     _Modal,
 )
