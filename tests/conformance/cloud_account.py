@@ -16,6 +16,7 @@ _SECRET_NAMES = {"boat": "BOAT_API_KEY", "e2b": "E2B_API_KEY", "daytona": "DAYTO
 _METADATA = {
     "boat": ("boat.dev", "/api/v1/limits", "Authorization", "Bearer "),
     "e2b": ("api.e2b.app", "/default-templates", "X-API-Key", ""),
+    "daytona": ("app.daytona.io", "/api/api-keys/current", "Authorization", "Bearer "),
 }
 _MAX_RESPONSE = 128 * 1024
 
@@ -115,18 +116,38 @@ def _inspect(provider, key):
         return {"access": "unverified"}
 
 
+def _daytona_ready(result, key):
+    if result.get("snapshot_matches") is not True or result.get("matching_warm_pool") not in ("absent", "feature unavailable"):
+        return False
+    try:
+        status, payload = _metadata("daytona", key)
+    except Exception:
+        return False
+    permissions = _object(payload).get("permissions")
+    return status == 200 and isinstance(permissions, list) and all(
+        scope in permissions for scope in ("write:sandboxes", "delete:sandboxes")
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("provider", choices=_SECRET_NAMES)
     parser.add_argument("--require-e2b-base-size", action="store_true")
+    parser.add_argument("--require-daytona-readiness", action="store_true")
     args = parser.parse_args()
     provider = args.provider
     if args.require_e2b_base_size and provider != "e2b":
         parser.error("--require-e2b-base-size is only supported for E2B")
+    if args.require_daytona_readiness and provider != "daytona":
+        parser.error("--require-daytona-readiness is only supported for Daytona")
     key = os.getenv(_SECRET_NAMES[provider])
     result = _inspect(provider, key) if key else {"access": "missing key"}
+    if args.require_daytona_readiness:
+        result["conformance_ready"] = _daytona_ready(result, key)
     print("Cloud account result:", json.dumps({"provider": provider, **result}))
     if args.require_e2b_base_size and result.get("base_template") != "within reservation":
+        return 1
+    if args.require_daytona_readiness and not result["conformance_ready"]:
         return 1
     return 0 if result["access"] == "verified" else 1
 

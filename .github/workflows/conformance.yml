@@ -122,6 +122,8 @@ jobs:
         run: |
           if [[ "$ANYCOMPUTE_CONFORMANCE_PROVIDER" == e2b ]]; then
             uv run --locked --no-sync python -m tests.conformance.cloud_account e2b --require-e2b-base-size
+          elif [[ "$ANYCOMPUTE_CONFORMANCE_PROVIDER" == daytona ]]; then
+            DAYTONA_USE_DEPRECATED_POLLING=true uv run --locked --no-sync python -m tests.conformance.cloud_account daytona --require-daytona-readiness
           fi
           uv run --locked anycompute gc --all --provider "$ANYCOMPUTE_CONFORMANCE_PROVIDER" --json
           ANYCOMPUTE_REPORT_SOURCE=project-run ANYCOMPUTE_CONFORMANCE_REPORT="$RUNNER_TEMP/conformance-report.json" \
