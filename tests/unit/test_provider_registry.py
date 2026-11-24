@@ -20,4 +20,4 @@ def test_registry_matches_adapter_files_extras_and_readme():
     assert set(extras["all"]) == {dependency for name in names for dependency in extras[name]}
 
     readme = (ROOT / "README.md").read_text()
-    assert set(re.findall(r"^\| `([a-z]+)` \|", readme, re.MULTILINE)) == names
+    assert set(re.findall(r"^\| `([a-z0-9]+)` \|", readme, re.MULTILINE)) == names

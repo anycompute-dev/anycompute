@@ -715,14 +715,16 @@ Official `modal` Python SDK 1.x, starting at 1.6.4. See the [Sandbox API](https:
 
 ### E2B
 
-Official `e2b` Python SDK (Python 3.11 or newer).
+Official `e2b` Python SDK 2.64.0. See the [Python SDK source](https://github.com/e2b-dev/E2B/tree/main/packages/python-sdk) and [sandbox lifecycle guide](https://e2b.dev/docs/sandbox/overview).
 
 - TTL maps to the sandbox timeout. `ttl_max_s` is 3600 in v0.1: E2B allows 1 hour on its Hobby plan and 24 hours on Pro (docs.e2b.dev/sandbox, checked 2026-11-23), and the adapter cannot read the plan. A longer TTL raises `InvalidTTLError` before create.
 - The default sandbox size is open: the docs give 2 vCPU and 512 MiB for the base template, and the pricing page gives 2 vCPU and 4 GiB (checked 2026-11-23). The spend reservation uses the larger size until the adapter's docs check settles it.
 - Labels map to `metadata`.
 - Delete maps to kill.
-- The adapter never sets the pause-on-timeout option. The lifetime and kill-client tests pass only when the sandbox is gone, not paused.
-- It turns off the SDK's connection retries through client options where it can.
+- The adapter explicitly selects kill on timeout. The lifetime and kill-client tests pass only when the sandbox is gone, not paused.
+- The adapter disables control-plane response retries. The SDK still retries failures before a request is sent, without replaying delivered requests. The adapter declares these transport retries in its capabilities.
+- Read-only observer attachment uses the pinned SDK's sandbox GET response. The public connect method can resume a paused sandbox. Commands use POSIX quoting and the SDK's separate output streams.
+- Project live conformance is disabled pending initial validation through protected CI.
 
 ### Daytona
 
