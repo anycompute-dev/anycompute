@@ -5,6 +5,7 @@ import sys
 import tarfile
 import threading
 import traceback
+from importlib.metadata import version
 from types import SimpleNamespace
 from unittest.mock import Mock
 from urllib.parse import urlsplit
@@ -37,6 +38,7 @@ class _ImageNotFound(_APIError):
 @pytest.fixture
 def sdk(monkeypatch):
     client = Mock()
+    client.api.headers = {}
     sdk = SimpleNamespace(
         from_env=Mock(return_value=client),
         errors=SimpleNamespace(DockerException=_DockerException, APIError=_APIError, ImageNotFound=_ImageNotFound),
@@ -84,6 +86,7 @@ def test_prepare_opens_the_client_lazily_and_reuses_a_cached_image(sdk):
     for _ in range(2):
         adapter.prepare(options={}, timeout_s=150)
     module.from_env.assert_called_once_with(timeout=None, use_context=True)
+    assert client.api.headers["User-Agent"] == f"anycompute/{version('anycompute')}"
     assert client.images.get.call_count == 2
     client.images.get.assert_called_with(DEFAULT_IMAGE)
     client.api.pull.assert_not_called()
@@ -653,6 +656,8 @@ def transport(monkeypatch, tmp_path):
 
     def make_request(pool, connection, method, url, *args, **kwargs):
         path = urlsplit(url).path
+        if path != "/version":
+            assert kwargs["headers"]["User-Agent"] == f"anycompute/{version('anycompute')}"
         calls.append((pool.host, method, path, kwargs["timeout"].read_timeout))
         result = replies.get(path, (500, {"message": "unexpected test route"}, {}))
         if isinstance(result, Exception):

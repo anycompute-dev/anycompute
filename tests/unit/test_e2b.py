@@ -1,6 +1,7 @@
 import json
 import sys
 from datetime import UTC, datetime
+from importlib.metadata import version
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -12,7 +13,8 @@ from anycompute.providers import e2b
 
 
 LABELS = {"anycompute": "1", "anycompute-run": "demo", "anycompute-ttl": "60"}
-SDK_OPTIONS = {"debug": False, "retries": 0, "request_timeout": 120}
+USER_AGENT = f"anycompute/{version('anycompute')}"
+SDK_OPTIONS = {"debug": False, "retries": 0, "request_timeout": 120, "api_headers": {"User-Agent": USER_AGENT}}
 
 
 class ServiceError(Exception):
@@ -161,6 +163,7 @@ def test_real_sdk_sends_one_create_and_attaches_with_get_only(monkeypatch):
     calls = []
 
     def transport(request):
+        assert request.headers["User-Agent"] == USER_AGENT
         calls.append((request.method, request.url.path))
         if request.method == "POST":
             payload = json.loads(request.content)
@@ -183,5 +186,7 @@ def test_real_sdk_sends_one_create_and_attaches_with_get_only(monkeypatch):
     adapter = e2b.SPEC.factory()
     with pytest.raises(ProviderError):
         adapter.create(ttl=60, labels=LABELS, options={}, timeout_s=120)
-    assert adapter.native("sb-one", timeout_s=120).sandbox_id == "sb-one"
+    sandbox = adapter.native("sb-one", timeout_s=120)
+    assert sandbox.sandbox_id == "sb-one"
+    assert sandbox.connection_config.sandbox_headers["User-Agent"] == USER_AGENT
     assert calls == [("POST", "/v2/sandboxes"), ("GET", "/sandboxes/sb-one")]
