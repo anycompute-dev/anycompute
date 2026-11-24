@@ -46,8 +46,9 @@ def test_lifetime(conformance, record_property):
     assert expiry.status in ("pass", "partial"), f"{expiry.reason} ({expiry.elapsed_s:.3f}s)"
     record_property("end_seconds", expiry.elapsed_s)
     record_property("delete_seconds", expiry.deleted_elapsed_s)
-    assert code == 123 and report["error"] is not None
-    assert report["error"]["type"] == "SandboxTimeoutError"
+    error = report["error"]
+    outcome = f"{error['type']} ({error.get('message', 'no details')})" if error else "workload exit"
+    assert code == 123 and error is not None and error["type"] == "SandboxTimeoutError", f"CLI exit {code} ({outcome})"
     assert report["sandbox_id"] == expiry.sandbox_id
 
 
