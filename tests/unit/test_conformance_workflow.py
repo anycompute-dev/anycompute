@@ -89,7 +89,7 @@ def gate(monkeypatch, tmp_path):
     }
     monkeypatch.setattr(providers, "PROVIDERS", tuple(
         ProviderSpec(name, ProviderCaps(live_run=enabled), no_client)
-        for name, enabled in [("docker", True), ("modal", True), ("e2b", False), ("boat", True)]
+        for name, enabled in [("docker", True), ("modal", True), ("e2b", False), ("daytona", False), ("boat", True)]
     ))
     return env, tmp_path / "output"
 
@@ -127,7 +127,7 @@ def test_weekly_matrix_uses_only_live_cloud_caps(gate, history, monkeypatch, cap
     assert ("no conformance tests ran" in capsys.readouterr().out) == (expected == "[]")
 
 
-@pytest.mark.parametrize("value", ["", "docker", "daytona", "Modal", "modal,modal", "modal,", "modal, boat",
+@pytest.mark.parametrize("value", ["", "docker", "unknown", "Modal", "modal,modal", "modal,", "modal, boat",
                                    "modal\n", "modal;boat", "modal adapters=boat"])
 def test_dispatch_rejects_invalid_adapter_input_before_history(gate, history, capsys, value):
     env, output = gate
@@ -153,6 +153,29 @@ def test_manual_e2b_counts_only_named_dispatches(gate, history, capsys):
     assert main(env) == 1
     assert "e2b: 5 extra runs exceed 4" in capsys.readouterr().err
     assert not output.exists()
+
+
+@pytest.mark.parametrize(("attempt", "prior", "month", "error"), [
+    (1, False, 11, None),
+    (1, True, 11, "daytona: 2 extra runs exceed 1"),
+    (2, False, 11, "daytona: 2 extra runs exceed 1"),
+    (1, False, 12, "limited to November 2026 UTC"),
+])
+def test_daytona_trial_allows_one_attempt_in_the_authorized_month(gate, history, capsys, attempt, prior, month, error):
+    env, output = gate
+    env.update(REQUESTED_ADAPTERS="daytona", GITHUB_RUN_ATTEMPT=str(attempt))
+    date = f"2026-{month:02d}-23T00:00:00Z"
+    weekly = run(1, attempt=5, event="schedule", title="Weekly conformance") | {"created_at": date}
+    past = run(2, attempt=1, title="adapters=daytona") | {"created_at": date}
+    trial = run(attempt=attempt, title="adapters=daytona") | {"created_at": date}
+    history[0].append(Reply(weekly, *([past] if prior else []), trial))
+
+    assert run_gate(env, now=NOW.replace(month=month)) == (1 if error else 0)
+    if error:
+        assert error in capsys.readouterr().err
+        assert not output.exists()
+    else:
+        assert output.read_text() == 'verified_attempt=1\nadapters=["daytona"]\n'
 
 
 @pytest.mark.parametrize("name, value", [
@@ -409,24 +432,27 @@ def test_cloud_sweeps_first_and_never_treats_zero_collected_tests_as_success(swe
     assert result.stdout.splitlines() == calls
 
 
-@pytest.mark.parametrize("size_check", [0, 1])
-def test_e2b_workflow_checks_size_before_the_sweep_or_suite(size_check):
+@pytest.mark.parametrize(("provider", "flag"), [
+    ("e2b", "--require-e2b-base-size"), ("daytona", "--require-daytona-readiness"),
+])
+@pytest.mark.parametrize("preflight", [0, 1])
+def test_cloud_workflow_checks_readiness_before_the_sweep_or_suite(provider, flag, preflight):
     test_step = step(job("conformance", "cloud"), "Sweep and run conformance")
     fake_uv = r'''
       uv() {
         printf '%s\n' "$*"
         if [[ "$3" == --no-sync ]]; then
-          return "$SIZE_CHECK"
+          return "$PREFLIGHT"
         fi
       }
     '''
-    result = bash(fake_uv + script(test_step), ANYCOMPUTE_CONFORMANCE_PROVIDER="e2b",
-                  SIZE_CHECK=str(size_check), RUNNER_TEMP="/tmp")
-    calls = ["run --locked --no-sync python -m tests.conformance.cloud_account e2b --require-e2b-base-size"]
-    if not size_check:
-        calls.extend(["run --locked anycompute gc --all --provider e2b --json",
+    result = bash(fake_uv + script(test_step), ANYCOMPUTE_CONFORMANCE_PROVIDER=provider,
+                  PREFLIGHT=str(preflight), RUNNER_TEMP="/tmp")
+    calls = [f"run --locked --no-sync python -m tests.conformance.cloud_account {provider} {flag}"]
+    if not preflight:
+        calls.extend([f"run --locked anycompute gc --all --provider {provider} --json",
                       "run --locked pytest -q -m live_conformance tests/conformance"])
-    assert result.returncode == size_check, result.stderr
+    assert result.returncode == preflight, result.stderr
     assert result.stdout.splitlines() == calls
 
 

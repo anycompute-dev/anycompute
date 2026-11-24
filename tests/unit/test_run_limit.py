@@ -149,7 +149,7 @@ def test_rejects_malformed_dispatch_tokens(title):
 
 def test_rejects_current_dispatch_to_ineligible_adapter():
     with pytest.raises(RunLimitError, match="live adapter"):
-        gate(page(run(title="adapters=daytona")))
+        gate(page(run(title="adapters=unknown")))
 
 
 @pytest.mark.parametrize("event", ["push", "", 1])

@@ -12,6 +12,7 @@ from tests.conformance import cloud_account
 @pytest.mark.parametrize(("provider", "host", "route", "auth"), [
     ("boat", "boat.dev", "/api/v1/limits", {"Authorization": "Bearer synthetic"}),
     ("e2b", "api.e2b.app", "/default-templates", {"X-API-Key": "synthetic"}),
+    ("daytona", "app.daytona.io", "/api/api-keys/current", {"Authorization": "Bearer synthetic"}),
 ])
 def test_account_http_checks_use_only_the_fixed_get_destination(monkeypatch, provider, host, route, auth):
     connection = Mock()
@@ -19,7 +20,7 @@ def test_account_http_checks_use_only_the_fixed_get_destination(monkeypatch, pro
     connector = Mock(return_value=connection)
     monkeypatch.setattr(cloud_account, "HTTPSConnection", connector)
 
-    assert cloud_account._inspect(provider, "synthetic") == {"access": "unverified", "http_status": 302}
+    assert cloud_account._metadata(provider, "synthetic") == (302, None)
     connector.assert_called_once_with(host, timeout=15)
     connection.request.assert_called_once_with("GET", route, headers={**auth, "Accept": "application/json"})
     connection.getresponse.return_value.read.assert_not_called()
@@ -61,6 +62,35 @@ def test_e2b_trial_requires_verified_base_resources(monkeypatch, templates, exit
     monkeypatch.setenv("E2B_API_KEY", "synthetic")
     monkeypatch.setattr(cloud_account, "_metadata", lambda provider, key: (200, templates))
     assert cloud_account.main() == exit_code
+
+
+@pytest.mark.parametrize(("snapshot", "pool", "scopes", "ready"), [
+    (True, "feature unavailable", ["write:sandboxes", "delete:sandboxes"], True),
+    (True, "absent", ["write:sandboxes", "delete:sandboxes"], True),
+    (True, "absent", ["write:sandboxes"], False),
+    (True, "absent", "write:sandboxes delete:sandboxes", False),
+    (True, "unverified", ["write:sandboxes", "delete:sandboxes"], False),
+    (True, "present", ["write:sandboxes", "delete:sandboxes"], False),
+    (False, "absent", ["write:sandboxes", "delete:sandboxes"], False),
+])
+def test_daytona_trial_requires_snapshot_pool_and_key_readiness(monkeypatch, capsys, snapshot, pool, scopes, ready):
+    monkeypatch.setattr(sys, "argv", ["account-check", "daytona", "--require-daytona-readiness"])
+    monkeypatch.setenv("DAYTONA_API_KEY", "synthetic")
+    monkeypatch.setattr(cloud_account, "_daytona", lambda: {
+        "access": "verified", "snapshot_matches": snapshot, "matching_warm_pool": pool,
+    })
+    metadata = Mock(return_value=(200, {"permissions": scopes, "name": "private name"}))
+    monkeypatch.setattr(cloud_account, "_metadata", metadata)
+
+    assert cloud_account.main() == (0 if ready else 1)
+    assert json.loads(capsys.readouterr().out.removeprefix("Cloud account result: ")) == {
+        "provider": "daytona", "access": "verified", "snapshot_matches": snapshot,
+        "matching_warm_pool": pool, "conformance_ready": ready,
+    }
+    if snapshot and pool in ("absent", "feature unavailable"):
+        metadata.assert_called_once_with("daytona", "synthetic")
+    else:
+        metadata.assert_not_called()
 
 
 @pytest.fixture
