@@ -37,4 +37,6 @@ jobs:
           BOAT_API_KEY: ${{ matrix.provider == 'boat' && secrets.BOAT_API_KEY || '' }}
           E2B_API_KEY: ${{ matrix.provider == 'e2b' && secrets.E2B_API_KEY || '' }}
           DAYTONA_API_KEY: ${{ matrix.provider == 'daytona' && secrets.DAYTONA_API_KEY || '' }}
+          # The locked Daytona v0 SDK otherwise opens an event connection on initialization.
+          DAYTONA_USE_DEPRECATED_POLLING: "true"
         run: uv run --locked --no-sync python -m tests.conformance.cloud_account "$ACCOUNT_PROVIDER"

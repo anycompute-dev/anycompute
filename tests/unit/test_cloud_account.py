@@ -85,4 +85,5 @@ def test_cloud_account_workflow_scopes_each_key_to_its_manual_main_job():
     assert "secrets." not in setup
     for provider, name in (("boat", "BOAT_API_KEY"), ("e2b", "E2B_API_KEY"), ("daytona", "DAYTONA_API_KEY")):
         assert f"${{{{ matrix.provider == '{provider}' && secrets.{name} || '' }}}}" in check
+    assert 'DAYTONA_USE_DEPRECATED_POLLING: "true"' in check
     assert 'uv run --locked --no-sync python -m tests.conformance.cloud_account "$ACCOUNT_PROVIDER"' in check
