@@ -4,10 +4,12 @@ from dataclasses import asdict
 
 from ..contract import ConfigError, ProviderSpec
 from .boat import SPEC as BOAT_SPEC
+from .daytona import SPEC as DAYTONA_SPEC
 from .docker import SPEC as DOCKER_SPEC
+from .e2b import SPEC as E2B_SPEC
 from .modal import SPEC as MODAL_SPEC
 
-PROVIDERS: tuple[ProviderSpec, ...] = (DOCKER_SPEC, MODAL_SPEC, BOAT_SPEC)
+PROVIDERS: tuple[ProviderSpec, ...] = (DOCKER_SPEC, MODAL_SPEC, BOAT_SPEC, E2B_SPEC, DAYTONA_SPEC)
 
 
 def get_provider(name: str) -> ProviderSpec:
