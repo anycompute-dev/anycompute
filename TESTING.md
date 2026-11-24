@@ -49,6 +49,8 @@ The manual **Modal account check** workflow on `main` uses the protected `confor
 
 The manual **Cloud account check** workflow on `main` uses the same protected environment to check Boat account allowances, E2B's `base` template size, and Daytona's snapshot and warm pools. Each job receives its own provider key and reports a small set of readiness fields. Before enabling live conformance, verify the spend controls in the design. [Spend rules](docs/design.md#spend-rules-for-the-conformance-runner)
 
+Daytona reports `feature unavailable` if its warm-pool list returns HTTP 404 after the snapshot check passes. This is the status Daytona documents for organizations with warm pools disabled. [Daytona troubleshooting](https://www.daytona.io/docs/en/troubleshooting/#provisioning)
+
 For the initial E2B conformance trial, dispatch **Conformance** on `main` with `adapters=e2b` and `verify=false`. The counted job checks the current `base` resources before launching. Weekly E2B runs require a separate opt-in through the provider capability.
 
 The protected `Conformance` workflow can compare one fixed workload on Modal and boat.dev. Set `adapters` to `modal,boat` and enable `verify` on a manual main-branch dispatch after both adapters are enabled and their credentials are configured. The comparison job records its JSON report in the step log.

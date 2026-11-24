@@ -89,9 +89,14 @@ def _daytona():
                 for pool in pools
             )
             result["matching_warm_pool"] = "present" if matches else "absent"
-    except Exception:
-        # This optional lookup can require a different permission from the snapshot read.
-        pass
+    except Exception as error:
+        from daytona_api_client.exceptions import ApiException
+
+        if isinstance(error, ApiException) and type(error.status) is int and 400 <= error.status <= 599:
+            result["warm_pool_http_status"] = error.status
+            if error.status == 404:
+                # Daytona returns 404 for the organization when warm pools are disabled.
+                result["matching_warm_pool"] = "feature unavailable"
     return result
 
 

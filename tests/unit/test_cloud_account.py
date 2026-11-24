@@ -63,29 +63,46 @@ def test_e2b_trial_requires_verified_base_resources(monkeypatch, templates, exit
     assert cloud_account.main() == exit_code
 
 
-@pytest.mark.parametrize(("target", "warm_pool_status"), [
-    ("us", "present"),
-    ("eu", "absent"),
-    (None, "unverified"),
-])
-def test_daytona_checks_the_exact_snapshot_and_warm_pool_region(monkeypatch, target, warm_pool_status):
+@pytest.fixture
+def daytona_client(monkeypatch):
     snapshot = SimpleNamespace(
         id="11111111-1111-1111-1111-111111111111", name="daytona-small", state="active",
         general=True, sandbox_class="container", cpu=1, mem=1, disk=3, gpu=0,
     )
     client = SimpleNamespace(
         snapshot=SimpleNamespace(get=Mock(return_value=snapshot)),
-        warm_pool=SimpleNamespace(list=Mock(return_value=[
-            SimpleNamespace(target=target, snapshot=snapshot.id, current_size=0, env={"private": "data"}),
-        ])),
+        warm_pool=SimpleNamespace(list=Mock()),
     )
     monkeypatch.setattr(cloud_account.daytona, "_call", lambda operation, action, project: action(client, None))
+    return client
+
+
+@pytest.mark.parametrize(("target", "warm_pool_status"), [
+    ("us", "present"),
+    ("eu", "absent"),
+    (None, "unverified"),
+])
+def test_daytona_checks_the_exact_snapshot_and_warm_pool_region(daytona_client, target, warm_pool_status):
+    snapshot_id = daytona_client.snapshot.get.return_value.id
+    daytona_client.warm_pool.list.return_value = [
+        SimpleNamespace(target=target, snapshot=snapshot_id, current_size=0, env={"private": "data"}),
+    ]
 
     assert cloud_account._inspect("daytona", "synthetic") == {
         "access": "verified", "snapshot_matches": True, "matching_warm_pool": warm_pool_status,
     }
-    client.snapshot.get.assert_called_once_with("daytona-small")
-    client.warm_pool.list.assert_called_once_with()
+    daytona_client.snapshot.get.assert_called_once_with("daytona-small")
+    daytona_client.warm_pool.list.assert_called_once_with()
+
+
+@pytest.mark.parametrize(("code", "status"), [(404, "feature unavailable"), (403, "unverified")])
+def test_daytona_reports_only_the_warm_pool_error_status(daytona_client, code, status):
+    exceptions = pytest.importorskip("daytona_api_client.exceptions")
+    daytona_client.warm_pool.list.side_effect = exceptions.ApiException(status=code, body="private response")
+
+    assert cloud_account._inspect("daytona", "synthetic") == {
+        "access": "verified", "snapshot_matches": True, "matching_warm_pool": status, "warm_pool_http_status": code,
+    }
 
 
 def test_cloud_account_workflow_scopes_each_key_to_its_manual_main_job():
