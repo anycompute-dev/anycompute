@@ -655,7 +655,20 @@ class Sandbox:
 
     def _check_expiry(self, operation, result=None):
         ctx = self._ctx
-        state = _bounded_call(ctx, "state", partial(self._client.state, ctx.sandbox_id), _CLEANUP_S)
+        sandbox_id = ctx.sandbox_id
+        assert sandbox_id is not None
+        start = ctx.clock.now()
+        deadline = start + _CLEANUP_S
+        inspect = partial(self._client.state, sandbox_id)
+        try:
+            state = _waited_call(ctx, "state", inspect, deadline)
+            if (state == SandboxState.RUNNING and ctx.provider == "docker" and result is not None
+                    and self._created_request is not None and start >= self._created_request + self._effective_ttl):
+                # Docker can report the exec exit before it updates the container state.
+                ctx.clock.sleep(min(1, max(0, deadline - ctx.clock.now())))
+                state = _waited_call(ctx, "state", inspect, deadline)
+        except _CallTimeout as error:
+            raise ProviderError(ctx.redact(f"{ctx.provider}: {error}"), **ctx.error_context()) from None
         if state in (SandboxState.GONE, SandboxState.STOPPED):
             raise SandboxTimeoutError(f"Sandbox ended during {operation}", **ctx.error_context(),
                                       stdout=ctx.redact(_decode(result.stdout)) if result else "",

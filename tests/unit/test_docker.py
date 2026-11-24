@@ -15,6 +15,7 @@ from anycompute.contract import (
     AuthError, ConfigError, InvalidPathError, ProviderError, RateLimitError, RawExecResult, SandboxInfo, SandboxState,
     SandboxTimeoutError,
 )
+from tests.fakes.clock import FakeClock
 
 
 class _DockerException(Exception):
@@ -419,6 +420,55 @@ def test_engine_owns_the_docker_exec_expiry_check_and_confirm(sdk, registered):
     assert [method for method, *_ in client.api.method_calls][-3:] == [
         "inspect_container", "remove_container", "inspect_container",
     ]
+
+
+@pytest.mark.parametrize("exit_code, elapsed, stops, rechecks", [
+    pytest.param(137, 30, True, True, id="killed-at-ttl"),
+    pytest.param(None, 30, True, True, id="missing-exit-at-ttl"),
+    pytest.param(137, 29, False, False, id="early-command-exit"),
+    pytest.param(137, 30, False, True, id="running-after-recheck"),
+])
+def test_docker_ambiguous_exit_rechecks_running_state_at_ttl(sdk, registered, monkeypatch,
+                                                           exit_code, elapsed, stops, rechecks):
+    _, client = sdk
+    clock = FakeClock()
+    monkeypatch.setattr(registered, "_clock", clock)
+    client.api.create_container.return_value = {"Id": "box-id"}
+    client.api.start.side_effect = lambda _: clock.sleep(2)
+    client.api.exec_create.side_effect = [{"Id": "mkdir-id"}, {"Id": "exec-id"}]
+    client.api.exec_inspect.side_effect = [{"ExitCode": 0}, {"ExitCode": exit_code}]
+
+    def start_exec(exec_id, **kwargs):
+        if exec_id == "mkdir-id":
+            return None, None
+        clock.sleep(elapsed - clock.now())
+        return b"part\xff", b"diagnostic"
+
+    def state(sandbox_id):
+        if client.api.remove_container.called:
+            raise _APIError(404, f"No such container: {sandbox_id}")
+        return {"State": {"Status": "removing" if stops and clock.now() >= 31 else "running"}}
+
+    client.api.exec_start.side_effect = start_exec
+    client.api.inspect_container.side_effect = state
+    options = {"provider": "docker", "ttl": 30, "run_id": "docker-test"}
+    if stops:
+        with pytest.raises(SandboxTimeoutError) as caught:
+            registered.run(["program"], **options)
+        result = caught.value
+        assert result.exit_code == 123
+    else:
+        result = registered.run(["program"], **options)
+        assert result.exit_code == 137
+    assert (result.stdout, result.stderr, result.sandbox_id, result.run_id) == (
+        "part\ufffd", "diagnostic", "box-id", "docker-test",
+    )
+    assert clock.now() == elapsed + int(rechecks)
+    assert [method for method, *_ in client.api.method_calls[-(3 + int(rechecks)):]] == (
+        ["inspect_container"] * (1 + int(rechecks)) + ["remove_container", "inspect_container"]
+    )
+    assert client.api.exec_start.call_count == 2
+    client.api.remove_container.assert_called_once_with("box-id", force=True)
 
 
 def test_upload_archives_only_the_basename_and_preserves_binary_bytes(sdk):

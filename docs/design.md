@@ -241,7 +241,7 @@ What the SDK does:
 - A dispatched create without a trustworthy outcome is a lost create: `ProviderError` with `sandbox_may_exist` and the gc hint. A known pre-allocation refusal is not a lost create. If an abandoned create later yields an ID while the process still runs, the same worker tries deletion under the cleanup clock and logs the result.
 - The same wait applies to delete and confirm calls, with the time left on the 120-second cleanup deadline as the budget. A delete or confirm call that reaches it raises `CleanupError` (rule 4), with no state check.
 - `anycompute gc` has no TTL. Each of its list calls, and each state call it makes to select sandboxes, gets 120 seconds (the cleanup clock's length) through the same wait. A call that reaches it raises `ProviderError` (exit 124) naming the provider. gc's delete and confirm calls keep the 120-second cleanup deadline.
-- The rule 3 state call (after a fired client timeout, or after an exec exit code of 137 or none) gets its own budget of 120 seconds (the cleanup clock's length) through the same wait. A state call that reaches it raises `ProviderError` (exit 124), and the delete and its confirm still run.
+- The rule 3 state check (after a fired client timeout, or after an exec exit code of 137 or none) gets one 120-second budget (the cleanup clock's length) across its state calls. A state call that reaches it raises `ProviderError` (exit 124), and the delete and its confirm still run.
 
 Tests:
 
@@ -259,6 +259,7 @@ What the SDK does:
 - When the provider ends the sandbox at the TTL while a command runs, `run()` and `Sandbox.exec()` raise `SandboxTimeoutError` with the sandbox ID, the run ID, and any partial stdout and stderr that the provider returned.
 - If a client timeout fires anyway, the engine asks the provider for the sandbox state: `gone` or `stopped` raises `SandboxTimeoutError`; `running` or `unknown` raises `ProviderError`. The delete and its confirm run either way.
 - When an exec returns an exit code that can mean the sandbox ended (137, or none, as docker's exec does when its container stops), the engine also asks the state call. A sandbox that is gone or stopped raises `SandboxTimeoutError`. An exit code of none while the sandbox still runs raises `ProviderError`. After an exit code of 137 or none, a state of `unknown` raises `ProviderError`, because the engine never treats `unknown` as `gone`. The delete and its confirm still run.
+- Docker can report the exec exit before it updates the container state. When the first state is `running` after an ambiguous exec result, the engine waits one second and checks once more within the same state budget, but only if the TTL could have elapsed since the create request. This uses the earliest possible start, not the later create reply. If the state stays `running`, 137 is still a command exit code.
 - Every anycompute error raised after a create carries `sandbox_seconds` (None when no delete confirmed). For an error raised inside a `Sandbox` block, `__exit__` sets it on the error in flight after the delete confirm.
 
 Tests:
@@ -267,6 +268,7 @@ Tests:
 - A unit test with a slow fake exec covers both client-timeout branches.
 - A unit test with a hung fake state call after a fired client timeout raises `ProviderError` at 120 seconds on a fake clock, and the delete and its confirm still run.
 - Recorded-response unit tests cover an exec that returns 137 after its container stopped (`SandboxTimeoutError`) and an exit code of none with the container gone (`SandboxTimeoutError`). They also cover an exit code of none while the container still runs (`ProviderError`) and an exit code of 137 with state `unknown` (`ProviderError`).
+- A recorded Docker response sequence returns 137 or none at the TTL, then reports `running` before reporting `stopped`. The test checks the timeout, both output streams, and one confirmed delete. Controls keep 137 a normal result before the TTL and when the container stays running.
 
 #### 4. Delete
 
