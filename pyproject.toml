@@ -13,7 +13,8 @@ license = "Apache-2.0"
 [project.optional-dependencies]
 docker = ["docker>=7.2"]
 modal = ["modal>=1.6.4,<2"]
-all = ["docker>=7.2", "modal>=1.6.4,<2"]
+boat = ["boat-sdk==1.13.0"]
+all = ["docker>=7.2", "modal>=1.6.4,<2", "boat-sdk==1.13.0"]
 
 [project.scripts]
 anycompute = "anycompute.cli:main"

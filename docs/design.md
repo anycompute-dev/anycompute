@@ -736,13 +736,15 @@ Official `daytona` Python SDK.
 
 ### boat.dev
 
-Official `boat-sdk`, sync only. boat.dev sells long-lived VMs, has no free tier and no custom image.
+Uses the [synchronous Boat SDK](https://docs.boat.dev/sdks/python), pinned to `boat-sdk` 1.13.0. The [API](https://docs.boat.dev/api/v1) offers full VMs and fixed images. The free trial requires a card.
 
 - TTL maps to `ttlSeconds`. This is a stop, so the lifetime is `partial`.
 - `ttl_max_s` is 480 in v0.1. boat.dev limits a synchronous command to 600 seconds (boat.dev limits page, checked 2026-11-23). So the exec budget (the TTL plus the 120-second grace) never passes it, and the adapter has no detached-command path.
-- Labels map to `labels`.
-- Delete sends the confirm header and returns on the 202. The engine's confirm poll waits for the asynchronous delete within the 120-second cleanup deadline.
-- The suite paces boat.dev creates at 6 a minute, half of the 12 starts a minute that the $20 plan allows, which is also its `creates_per_minute` cap.
+- Labels map to `labels` on create. List uses the label filters and reads each cursor page, with a local check of every returned label and creation time.
+- Credentials come from `BOAT_API_KEY`. Creates request private VMs with provider account secret injection and monitoring disabled. The adapter allows explicit `environment` variables and disables SDK transport retries.
+- The adapter sends a quoted shell command for the requested working directory. It checks that read-back paths name regular files, then uses the [binary file endpoints](https://docs.boat.dev/api/reference/agent/read-sandbox-file). Direct reads and writes are limited to 5 MiB.
+- Delete sends the confirm header and returns on the 202. The engine polls the returned deletion operation within the 120-second cleanup deadline. The adapter keeps the operation ID in memory during cleanup.
+- The suite paces boat.dev creates at 6 a minute, half of the 12 starts a minute that the $20 plan allows, which is also its `creates_per_minute` cap. Project live runs remain disabled pending credentials and conformance.
 
 ### docker
 
