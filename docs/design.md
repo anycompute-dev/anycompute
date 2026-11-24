@@ -701,15 +701,16 @@ Every provider SDK's own default command timeout (Daytona 10 s, boat.dev 30 s, E
 
 ### Modal
 
-Official `modal` Python SDK.
+Official `modal` Python SDK 1.x, starting at 1.6.4. See the [Sandbox API](https://modal.com/docs/sdk/py/latest/Sandbox) and [Sandbox guide](https://modal.com/docs/guide/sandboxes).
 
-- TTL maps to the sandbox timeout (a hard deadline, up to 24 hours).
+- TTL maps to the sandbox timeout (a hard deadline, up to 24 hours). The sandbox uses gVisor and a `sleep infinity` entrypoint. The optional `image` (a registry reference) and `environment` are the only provider options.
 - Labels map to tags (at most 10).
-- Delete maps to terminate. The finished record stays readable, and the list omits it.
+- Delete requests termination. A sandbox lookup and `poll()` confirm that it has finished. The finished record stays readable, and the list omits it.
+- Read-back uses filesystem stat and binary read. `exec` passes literal arguments and requests bytes from both streams.
 - A sandbox needs an App. The adapter looks up one App per process (`App.lookup("anycompute", create_if_missing=True)`) inside its first waited call, under that call's budget, and passes its `app_id` to every list. The adapter holds no lock across the lookup; a lock guards only the stored `app_id`.
 - Its gRPC retries cannot be turned off, so `create_retry` and `exec_retry` are `partial`.
-- Its `key_sources` cover the token environment variables and every profile in the config file, not only the active one. The config file is the file at `MODAL_CONFIG_PATH` when it is set, else `~/.modal.toml`. A unit test checks that the engine redacts a key in a non-default profile of a `MODAL_CONFIG_PATH` file.
-- Its unit tests stub the SDK's exceptions, because its calls go over gRPC, not HTTP.
+- Its `key_sources` cover the SDK token and OAuth environment variables and the corresponding fields in every profile in the config file. The config file is the file at `MODAL_CONFIG_PATH` when it is set, else `~/.modal.toml`. A unit test checks that the engine redacts a key in a non-default profile of a `MODAL_CONFIG_PATH` file.
+- Its unit tests stub the SDK exceptions. The SDK uses `ResourceExhaustedError` for both quotas and rate limits, so the adapter maps an explicit quota or rate-limit message and reports other cases as `ProviderError`.
 - It is the first live cloud adapter.
 
 ### E2B
