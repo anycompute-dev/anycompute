@@ -47,6 +47,8 @@ When publishing is authorized, use Modal's `image pull` with the verified regist
 
 The manual **Modal account check** workflow on `main` uses the protected `conformance` secrets to check workspace authentication and look up `anycompute-conformance:v1`. It reports fixed status messages and uses metadata lookups only. Confirm the active workspace usage cap separately in Modal Usage & Billing. [Workspace API](https://modal.com/docs/sdk/py/latest/Workspace) · [Modal budgets](https://modal.com/docs/guide/budgets)
 
+The manual **Cloud account check** workflow on `main` uses the same protected environment to check Boat account allowances, E2B's `base` template size, and Daytona's snapshot and warm pools. Each job receives its own provider key and reports a small set of readiness fields. Before enabling live conformance, verify the spend controls in the design. [Spend rules](docs/design.md#spend-rules-for-the-conformance-runner)
+
 The protected `Conformance` workflow can compare one fixed workload on Modal and boat.dev. Set `adapters` to `modal,boat` and enable `verify` on a manual main-branch dispatch after both adapters are enabled and their credentials are configured. The comparison job records its JSON report in the step log.
 
 Do not run cloud conformance locally. The live-test and spend rules are in [the design](docs/design.md#live-runs).

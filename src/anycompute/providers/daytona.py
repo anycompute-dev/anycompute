@@ -19,6 +19,8 @@ from ..contract import (
 _ROOT_LOCK = Lock()
 _roots = {}
 _project_pool = None
+_PROJECT_SNAPSHOT = "daytona-small"
+_PROJECT_TARGET = "us"
 
 
 def _sdk():
@@ -111,6 +113,17 @@ def _created_at(value):
     return None
 
 
+def _checked_snapshot_id(snapshot):
+    if (snapshot.name != _PROJECT_SNAPSHOT or snapshot.general is not True or snapshot.state != "active"
+            or snapshot.sandbox_class != "container" or (snapshot.cpu, snapshot.mem, snapshot.disk, snapshot.gpu) != (1, 1, 3, 0)
+            or not isinstance(snapshot.id, str)):
+        raise ProviderError("The active public daytona-small snapshot does not match conformance pricing")
+    try:
+        return str(UUID(snapshot.id))
+    except ValueError:
+        raise ProviderError("Daytona conformance requires a snapshot ID") from None
+
+
 class _Daytona:
     def __init__(self):
         self._sandbox = None
@@ -131,15 +144,8 @@ class _Daytona:
             locked = False
         if not locked:
             raise ConfigError("Daytona conformance requires SDK 2.1.0 and API client 0.233.0")
-        sized = _call("verify snapshot", lambda client, _: client.snapshot.get("daytona-small"), project=True)
-        if (sized.name != "daytona-small" or sized.general is not True or sized.state != "active"
-                or sized.sandbox_class != "container" or (sized.cpu, sized.mem, sized.disk, sized.gpu) != (1, 1, 3, 0)
-                or not isinstance(sized.id, str)):
-            raise ProviderError("The active public daytona-small snapshot does not match conformance pricing")
-        try:
-            self._project_snapshot_id = str(UUID(sized.id))
-        except ValueError:
-            raise ProviderError("Daytona conformance requires a snapshot ID") from None
+        snapshot = _call("verify snapshot", lambda client, _: client.snapshot.get(_PROJECT_SNAPSHOT), project=True)
+        self._project_snapshot_id = _checked_snapshot_id(snapshot)
 
     def create(self, *, ttl: int, labels: Mapping[str, str], options: Mapping[str, object], timeout_s: float) -> str:
         project = getenv("ANYCOMPUTE_CONFORMANCE_LIVE") == "1"
@@ -150,7 +156,7 @@ class _Daytona:
             snapshot = self._project_snapshot_id
             if snapshot is None:
                 raise ConfigError("Daytona conformance requires a verified snapshot before create")
-            project_settings = {"target": "us", "network_block_all": True}
+            project_settings = {"target": _PROJECT_TARGET, "network_block_all": True}
         else:
             snapshot = options.get("snapshot", "daytona-small")
             if not isinstance(snapshot, str) or not snapshot or any(char.isspace() or char == "\0" for char in snapshot):

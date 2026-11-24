@@ -1,0 +1,42 @@
+name: Cloud account checks
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  account:
+    name: ${{ matrix.provider }} account check
+    if: ${{ github.ref == 'refs/heads/main' }}
+    environment: conformance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [boat, e2b, daytona]
+    env:
+      ACCOUNT_PROVIDER: ${{ matrix.provider }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: "0.9.18"
+          enable-cache: false
+      - run: uv sync --locked --python 3.12 --extra "$ACCOUNT_PROVIDER"
+      - name: Read provider metadata
+        timeout-minutes: 2
+        env:
+          BOAT_API_KEY: ${{ matrix.provider == 'boat' && secrets.BOAT_API_KEY || '' }}
+          E2B_API_KEY: ${{ matrix.provider == 'e2b' && secrets.E2B_API_KEY || '' }}
+          DAYTONA_API_KEY: ${{ matrix.provider == 'daytona' && secrets.DAYTONA_API_KEY || '' }}
+          # The locked Daytona v0 SDK otherwise opens an event connection on initialization.
+          DAYTONA_USE_DEPRECATED_POLLING: "true"
+        run: uv run --locked --no-sync python -m tests.conformance.cloud_account "$ACCOUNT_PROVIDER"
