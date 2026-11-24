@@ -12,6 +12,35 @@ For the live Docker suite, start a local Linux-container daemon. Run `ANYCOMPUTE
 
 Run `uv build` to build the source distribution and wheel. This command does not publish either file.
 
+## Prepare the Modal image locally
+
+Use the same pinned Python base as Docker conformance. Modal requires a `linux/amd64` image. Run these commands from the repository root to pull the public base, tag it locally, and smoke-test the fixed workload's commands with networking disabled. [Modal image requirements](https://modal.com/docs/guide/existing-images)
+
+```sh
+base_image=$(uv run --locked python -c 'from anycompute.providers.docker import DEFAULT_IMAGE; print(DEFAULT_IMAGE)')
+base_image="docker.io/library/$base_image"
+docker pull --platform linux/amd64 "$base_image"
+docker image tag "$base_image" anycompute-conformance:v1
+docker run --rm --pull never --platform linux/amd64 --network none anycompute-conformance:v1 sh -ec '
+  test "$(uname -m)" = x86_64
+  python3 --version
+  mkdir -p /tmp/anycompute/nested
+  cd /tmp/anycompute
+  printf "\000\377binary\n" > fixture.bin
+  cp fixture.bin nested/copy.bin
+  cmp fixture.bin nested/copy.bin
+  printf "%s\n" "anycompute verify" > out.txt
+  test "$(cat out.txt)" = "anycompute verify"
+  status=0
+  timeout 1 sleep infinity || status=$?
+  test "$status" -eq 124
+'
+```
+
+When publishing is authorized, use Modal's `image pull` with the verified registry digest and the name `anycompute-conformance:v1` in the CI token's Modal environment. Record the registry digest and Modal image ID because a named Modal tag can be updated. [Modal CLI](https://modal.com/docs/cli/latest/image#modal-image-pull) · [Named images](https://modal.com/docs/guide/named-images)
+
+## Protected cloud conformance
+
 The protected `Conformance` workflow can compare one fixed workload on Modal and boat.dev. Set `adapters` to `modal,boat` and enable `verify` on a manual main-branch dispatch after both adapters are enabled and their credentials are configured. The comparison job records its JSON report in the step log.
 
 Do not run cloud conformance locally. The live-test and spend rules are in [the design](docs/design.md#live-runs).
