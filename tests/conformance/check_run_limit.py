@@ -12,7 +12,7 @@ import sys
 from urllib.parse import urlencode
 
 from anycompute import providers
-from tests.conformance.runner import VERIFY_ADAPTERS, RunLimitError, check_run_limit
+from tests.conformance.runner import MANUAL_TRIAL_ADAPTERS, VERIFY_ADAPTERS, RunLimitError, check_run_limit
 
 _MAX_PAGE_BYTES = 8 * 1024 * 1024
 
@@ -69,7 +69,7 @@ def main(env: Mapping[str, str] = os.environ, *, now: datetime | None = None) ->
             selected = sorted(live)
         elif event == "workflow_dispatch":
             selected = env.get("REQUESTED_ADAPTERS", "").split(",")
-            if set(selected) - live or len(set(selected)) != len(selected):
+            if set(selected) - (live | MANUAL_TRIAL_ADAPTERS) or len(set(selected)) != len(selected):
                 raise RunLimitError("The adapters input must be a comma-separated list of distinct enabled cloud adapters")
         else:
             raise RunLimitError("Unsupported conformance workflow event")

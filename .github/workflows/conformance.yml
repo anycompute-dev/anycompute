@@ -120,6 +120,9 @@ jobs:
           E2B_API_KEY: ${{ matrix.provider == 'e2b' && secrets.E2B_API_KEY || '' }}
           DAYTONA_API_KEY: ${{ matrix.provider == 'daytona' && secrets.DAYTONA_API_KEY || '' }}
         run: |
+          if [[ "$ANYCOMPUTE_CONFORMANCE_PROVIDER" == e2b ]]; then
+            uv run --locked --no-sync python -m tests.conformance.cloud_account e2b --require-e2b-base-size
+          fi
           uv run --locked anycompute gc --all --provider "$ANYCOMPUTE_CONFORMANCE_PROVIDER" --json
           ANYCOMPUTE_REPORT_SOURCE=project-run ANYCOMPUTE_CONFORMANCE_REPORT="$RUNNER_TEMP/conformance-report.json" \
             uv run --locked pytest -q -m live_conformance tests/conformance

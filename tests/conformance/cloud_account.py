@@ -1,8 +1,8 @@
 """Read account metadata with the protected CI credentials and report only fixed fields."""
 
+import argparse
 import json
 import os
-import sys
 from contextlib import closing
 from http.client import HTTPSConnection
 from math import inf
@@ -111,12 +111,18 @@ def _inspect(provider, key):
 
 
 def main() -> int:
-    if len(sys.argv) != 2 or sys.argv[1] not in _SECRET_NAMES:
-        raise SystemExit("Select boat, e2b, or daytona.")
-    provider = sys.argv[1]
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("provider", choices=_SECRET_NAMES)
+    parser.add_argument("--require-e2b-base-size", action="store_true")
+    args = parser.parse_args()
+    provider = args.provider
+    if args.require_e2b_base_size and provider != "e2b":
+        parser.error("--require-e2b-base-size is only supported for E2B")
     key = os.getenv(_SECRET_NAMES[provider])
     result = _inspect(provider, key) if key else {"access": "missing key"}
     print("Cloud account result:", json.dumps({"provider": provider, **result}))
+    if args.require_e2b_base_size and result.get("base_template") != "within reservation":
+        return 1
     return 0 if result["access"] == "verified" else 1
 
 

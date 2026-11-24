@@ -25,6 +25,7 @@ MAX_TTL_S = 120
 _PROJECT_CREATE_ATTEMPTS = {"modal": 4, "daytona": 1}
 _MODAL_MAX_CREATES = 7  # Stay below the previous 30-allocation ceiling.
 VERIFY_ADAPTERS = ("modal", "boat")
+MANUAL_TRIAL_ADAPTERS = frozenset({"e2b"})
 GRACE_S = engine._GRACE_S
 TEST_TIMEOUT_S = 540
 BUDGET_USD = Decimal("2")
@@ -161,7 +162,8 @@ def check_run_limit(
 
     fetch_page(month_start_utc, page, per_page) returns HTTP status and raw JSON
     for this UTC month's conformance.yml runs, with no event/status filter.
-    Pass the same live_run adapter names used for the weekly jobs.
+    Pass the same live_run adapter names used for the weekly jobs. Count trial
+    adapters only on manual dispatches that name them.
     """
     _integer(current_run_id, "current run ID", 1, error=RunLimitError)
     _integer(current_attempt, "current run attempt", 1, error=RunLimitError)
@@ -170,6 +172,7 @@ def check_run_limit(
     ):
         raise RunLimitError("Invalid live adapter names")
     live = set(live_adapters) - {"docker"}
+    manual = live | MANUAL_TRIAL_ADAPTERS
     month = _utc(now, "now").replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
     counts: Counter[str] = Counter()
@@ -231,10 +234,10 @@ def check_run_limit(
             if run_id == current_run_id:
                 if attempt != current_attempt:
                     raise RunLimitError("GitHub history does not match the current run attempt")
-                if targets - live:
+                if targets - manual:
                     raise RunLimitError("Current dispatch names a non-live adapter")
                 current = targets
-            for target in targets & live:
+            for target in targets & manual:
                 counts[target] += extra
 
         if len(seen) == total:
@@ -267,7 +270,8 @@ def select_provider(env: Mapping[str, str]) -> ProviderSpec:
         spec = providers.get_provider(name)
     except ConfigError:
         raise ValueError("ANYCOMPUTE_CONFORMANCE_PROVIDER does not name a registered adapter") from None
-    if name != "docker" and not spec.caps.live_run:
+    manual_trial = name in MANUAL_TRIAL_ADAPTERS and env.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+    if name != "docker" and not spec.caps.live_run and not manual_trial:
         raise ValueError("Selected adapter is not enabled for live conformance")
     if name == "modal" and env.get("MODAL_MAX_THROTTLE_WAIT") != "0":
         raise ValueError("Modal conformance requires MODAL_MAX_THROTTLE_WAIT=0")

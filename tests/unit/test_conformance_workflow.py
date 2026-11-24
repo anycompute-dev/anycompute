@@ -127,7 +127,7 @@ def test_weekly_matrix_uses_only_live_cloud_caps(gate, history, monkeypatch, cap
     assert ("no conformance tests ran" in capsys.readouterr().out) == (expected == "[]")
 
 
-@pytest.mark.parametrize("value", ["", "docker", "e2b", "Modal", "modal,modal", "modal,", "modal, boat",
+@pytest.mark.parametrize("value", ["", "docker", "daytona", "Modal", "modal,modal", "modal,", "modal, boat",
                                    "modal\n", "modal;boat", "modal adapters=boat"])
 def test_dispatch_rejects_invalid_adapter_input_before_history(gate, history, capsys, value):
     env, output = gate
@@ -136,6 +136,22 @@ def test_dispatch_rejects_invalid_adapter_input_before_history(gate, history, ca
     assert main(env) == 1
     assert "adapters input" in capsys.readouterr().err
     assert not history[1]
+    assert not output.exists()
+
+
+def test_manual_e2b_counts_only_named_dispatches(gate, history, capsys):
+    env, output = gate
+    env["REQUESTED_ADAPTERS"] = "e2b"
+    weekly = run(1, attempt=5, event="schedule", title="Weekly conformance")
+    trial = run(title="adapters=e2b")
+    history[0].append(Reply(weekly, trial))
+    assert main(env) == 0
+    assert output.read_text() == 'verified_attempt=2\nadapters=["e2b"]\n'
+    output.unlink()
+
+    history[0].append(Reply(weekly, run(2, attempt=3, title="adapters=e2b"), trial))
+    assert main(env) == 1
+    assert "e2b: 5 extra runs exceed 4" in capsys.readouterr().err
     assert not output.exists()
 
 
@@ -390,6 +406,27 @@ def test_cloud_sweeps_first_and_never_treats_zero_collected_tests_as_success(swe
     if not sweep:
         calls.append("run --locked pytest -q -m live_conformance tests/conformance")
     assert result.returncode == expected, result.stderr
+    assert result.stdout.splitlines() == calls
+
+
+@pytest.mark.parametrize("size_check", [0, 1])
+def test_e2b_workflow_checks_size_before_the_sweep_or_suite(size_check):
+    test_step = step(job("conformance", "cloud"), "Sweep and run conformance")
+    fake_uv = r'''
+      uv() {
+        printf '%s\n' "$*"
+        if [[ "$3" == --no-sync ]]; then
+          return "$SIZE_CHECK"
+        fi
+      }
+    '''
+    result = bash(fake_uv + script(test_step), ANYCOMPUTE_CONFORMANCE_PROVIDER="e2b",
+                  SIZE_CHECK=str(size_check), RUNNER_TEMP="/tmp")
+    calls = ["run --locked --no-sync python -m tests.conformance.cloud_account e2b --require-e2b-base-size"]
+    if not size_check:
+        calls.extend(["run --locked anycompute gc --all --provider e2b --json",
+                      "run --locked pytest -q -m live_conformance tests/conformance"])
+    assert result.returncode == size_check, result.stderr
     assert result.stdout.splitlines() == calls
 
 
