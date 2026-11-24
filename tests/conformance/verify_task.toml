@@ -1,0 +1,3 @@
+command = ["sh", "-c", "printf '%s\\n' 'anycompute verify' > out.txt; cat out.txt"]
+read = ["out.txt"]
+ttl = 120

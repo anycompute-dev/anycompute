@@ -10,4 +10,6 @@ For the live Docker suite, start a local Linux-container daemon. Run `ANYCOMPUTE
 
 Run `uv build` to build the source distribution and wheel. This command does not publish either file.
 
+The protected `Conformance` workflow can compare one fixed workload on Modal and boat.dev. Set `adapters` to `modal,boat` and enable `verify` on a manual main-branch dispatch after both adapters are enabled and their credentials are configured. The comparison job records its JSON report in the step log.
+
 Do not run cloud conformance locally. The live-test and spend rules are in [the design](docs/design.md#live-runs).
