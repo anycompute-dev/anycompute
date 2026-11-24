@@ -4,6 +4,7 @@ import subprocess
 import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
+from urllib.parse import urlunsplit
 
 import pytest
 
@@ -147,7 +148,8 @@ def test_list_drains_every_page_with_app_and_label_filter(sdk):
 
 
 @pytest.mark.parametrize(("configured", "reported"), [
-    ("https://private-key:private-secret@api.modal.com/control?token=opaque", "https://api.modal.com"),
+    (urlunsplit(("https", "example-user:example-password@api.modal.com", "/control", "debug=1", "")),
+     "https://api.modal.com"),
     ("https://api.modal.com, https://api.modal2.com", "unknown"),
 ])
 def test_runtime_host_reports_one_endpoint_without_userinfo(sdk, configured, reported):
