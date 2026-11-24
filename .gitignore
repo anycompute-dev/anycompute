@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+.pytest_cache/
+dist/
+*.egg-info/
+anycompute-out/
+.env
+.env.*
+.gstack/tmp/
+.gstack/qa-reports/

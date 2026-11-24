@@ -1,0 +1,13 @@
+{
+  "$schema": "https://github.com/garrytan/gstack/docs/pregate.md#pregate-v1",
+  "runner": "uv run --locked pytest -q {files}",
+  "strays": { "allow": ["uv.lock"] },
+  "dependencies": {
+    "src/anycompute/**": ["tests/unit/test_contract.py", "tests/unit/test_engine.py", "tests/unit/test_cli.py", "tests/unit/test_fake_provider.py"],
+    "tests/__init__.py": ["tests/unit/test_fake_provider.py"],
+    "tests/fakes/**": ["tests/unit/test_fake_provider.py"],
+    "pyproject.toml": ["tests/unit/test_contract.py", "tests/unit/test_project_checks.py"],
+    "uv.lock": ["tests/unit/test_contract.py", "tests/unit/test_project_checks.py"],
+    ".github/workflows/ci.yml": ["tests/unit/test_project_checks.py"]
+  }
+}

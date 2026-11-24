@@ -5,7 +5,7 @@ An open-source (Apache-2.0) Python SDK and CLI that runs short, stateless sandbo
 ## Start here
 
 - `docs/design.md` is the build spec for v0.1. Read it before you change code.
-- Its "Next Steps" section lists the work in order. There is no code yet, so work starts at Next Step 1 (prices) and Next Step 2 (the fake provider, the contract types, the Provider protocol and the engine).
+- Its "Next Steps" section lists the work in order. Check the files and merged pull requests for progress.
 - `TODOS.md` holds deferred work. Do not build a TODOS item before v0.1 unless the design changes first.
 
 ## Rules

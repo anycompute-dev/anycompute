@@ -1,6 +1,6 @@
 # anycompute design (v0.1)
 
-Status: approved design for anycompute v0.1. No code exists yet.
+Status: approved design for anycompute v0.1.
 License: Apache-2.0. This file is the build spec; deferred work is in `TODOS.md`.
 
 ## Problem
@@ -59,7 +59,7 @@ v0.1 is one Python implementation plus a CLI. The existing switching libraries a
 - Error messages, the JSON output, `verify` reports and the public report replace the value of every provider key (from an environment variable or a provider config file such as Modal's profile) with `***`.
 - The engine also redacts the values in `provider_options[*]["environment"]`, because users pass sandbox secrets there. The short-value rule below differs for them.
 - The engine finds the key values from each adapter's `key_sources` cap.
-- The engine redacts each string field (messages, stdout, stderr, report text) before serialization, never the serialized JSON, so the output stays valid JSON and the engine still finds an escaped secret.
+- The engine masks both raw key values and their usual Python and JSON escapes before serializing data fields. It does not redact the serialized JSON or change fixed field names, error types, or status values.
 - The engine skips an empty value, and a `provider_options` environment value shorter than 8 characters.
 - The engine redacts a provider key of any length. It replaces a key shorter than 8 characters only where it appears as a whole token, so short values do not damage unrelated text. A whole token has the start or end of the text, or a character outside `[A-Za-z0-9_-]`, on each side.
 
@@ -188,9 +188,9 @@ CLI subprocess tests run a test launcher in `tests/fakes/`. The launcher registe
 
 **Clock.** The engine owns one clock object (now, sleep and a timed wait). Every engine timer (budgets, the cleanup deadline, the poll schedule, the pacer, the gc age rule, `sandbox_seconds`) uses it. No engine wait calls `time.sleep` or `Thread.join` with a real timeout directly. Unit tests and the fake launcher swap it for a fake clock.
 
-**Thread safety.** The engine keeps no shared mutable state except the per-process run ID and one locked create pacer per provider. Each `Sandbox` owns its own provider client, or the adapter shares one client that it builds with no lock held. A lock guards only the stored client (the first stored client wins), as with the Modal `app_id`. No adapter holds a lock across a provider call. So `run()` and separate `Sandbox` objects are safe to use from many threads.
+**Thread safety.** The engine shares the per-process run ID, one locked create pacer per provider, and bounded worker admission (rule 2). Each `Sandbox` owns its own provider client, or the adapter shares one client that it builds with no lock held. A lock guards only the stored client (the first stored client wins), as with the Modal `app_id`. No adapter holds a lock across a provider call. `run()` and separate `Sandbox` objects are safe to use from many threads.
 
-**Sandbox object.** `Sandbox(provider, ttl=300, provider_options=None, creates_per_minute=None, run_id=None)` creates the sandbox in its constructor, so the TTL counts from there, and `with` is optional. It has `sandbox_id` and `run_id`, `write(path, bytes)`, `exec(argv)` (it returns `ExecResult(stdout, stderr, exit_code)`), `read(path)` (bytes, or None for a missing file), `native` and `close()`. `close()` deletes the sandbox (rule 4); `__exit__` calls it, and a second call does nothing. After `close()`, `exec`, `write` and `read` raise `ConfigError` with no provider call, and the object exposes `sandbox_seconds` and `outside_contract`. A failure inside the constructor after create still deletes the sandbox (rule 5).
+**Sandbox object.** `Sandbox(provider, ttl=300, provider_options=None, creates_per_minute=None, run_id=None)` creates the sandbox in its constructor, so the TTL counts from there, and `with` is optional. It has `sandbox_id` and `run_id`, `write(path, bytes)`, `exec(argv)` (it returns `ExecResult(stdout, stderr, exit_code)`), `read(path)` (bytes, or None for a missing file), `native` and `close()`. `close()` deletes the sandbox (rule 4); `__exit__` calls it. After confirmed deletion, another `close()` does nothing. After failed or interrupted cleanup, it reports `CleanupError` without a new delete. After `close()`, `exec`, `write` and `read` raise `ConfigError` with no provider call, and the object exposes `sandbox_seconds` and `outside_contract`. A failure inside the constructor after create still deletes the sandbox (rule 5).
 
 **No async API in v0.1.** A native `arun()` and `AsyncSandbox` are deferred (`TODOS.md`). Async callers wrap `run()` in a thread until then. Streaming reads for large output files are also deferred.
 
@@ -217,7 +217,7 @@ CLI subprocess tests run a test launcher in `tests/fakes/`. The launcher registe
 What the SDK does:
 
 - `ttl` (seconds) is optional on every create, in `run()`, `Sandbox()`, the CLI `--ttl` flag and `task.toml`. It defaults to 300, and the SDK always sends a provider lifetime.
-- The TTL counts from create.
+- The TTL counts from create, except in an adapter's declared partial pre-start window (rule 2).
 - `ttl` is an int, and a `bool` is not an int here. A TTL that is not an int, or is below 1, raises `InvalidTTLError` before create. A `task.toml` `ttl` of the wrong type (such as `"120"` or `120.0`) also raises `InvalidTTLError`.
 - The engine rounds it up to the provider's granularity from the adapter's caps (for example whole minutes on Daytona) and reports `effective_ttl` in the Result.
 - An `effective_ttl` above the provider's maximum raises `InvalidTTLError` before create. It is never clamped.
@@ -233,12 +233,12 @@ Tests:
 
 What the SDK does:
 
-- The engine gives every work call (create, write, exec, read) a client timeout of the remaining TTL plus the maximum grace period, always finite and never off, so no client-side timeout ends a command before the provider's deadline.
+- The engine gives create the effective TTL plus the maximum grace period as its budget. Later work shares a deadline measured from dispatch of the create request. For an adapter with `pre_start_window: partial`, the engine starts that work deadline at the successful create reply instead. Reported `sandbox_seconds` still starts at request dispatch. The budgets are finite; the client timeout must not end a command before the provider's deadline.
 - The docker image pull runs before create, so no sandbox exists yet and the TTL does not run yet. The pull gets the TTL plus the maximum grace period as its budget. A pull that reaches it raises `ProviderError` (exit 124) with `sandbox_may_exist` false.
 - Every provider call on every adapter goes through the engine's one waited-call helper, which waits up to the call's budget on the engine clock. An SDK's own timeout may stay as an inner guard only when the adapter sets it to the call's budget or longer, so it never fires before the helper's budget ends. The adapter always sets or turns off each SDK default timeout.
-- At that budget the engine treats a work call as a fired client timeout (the state check in rule 3) and leaves the abandoned call to finish in the background. It logs one DEBUG line for the abandoned call.
-- Each waited call runs in its own daemon thread, never in a `concurrent.futures` executor, because Python joins an executor's workers at exit and a hung call would then hold the process past its budget.
-- A create that reaches its budget is a lost create: `ProviderError` with `sandbox_may_exist` and the copyable gc command (see CLI). If the abandoned create later returns a sandbox ID while the process still runs, the engine deletes it under the cleanup clock and logs it (late-create reconciliation).
+- The engine rejects any reply at or after the original deadline, even if the worker signals before the caller resumes. It leaves a call that is already in progress to finish in the background and logs the abandonment.
+- Each waited call uses a daemon thread. The process admits up to 64 work calls and reserves a separate 64 slots for delete and confirm. A hung call holds its slot until it exits. If no slot is available or the thread cannot start, the engine reports a typed error without dispatching the call.
+- A dispatched create without a trustworthy outcome is a lost create: `ProviderError` with `sandbox_may_exist` and the gc hint. A known pre-allocation refusal is not a lost create. If an abandoned create later yields an ID while the process still runs, the same worker tries deletion under the cleanup clock and logs the result.
 - The same wait applies to delete and confirm calls, with the time left on the 120-second cleanup deadline as the budget. A delete or confirm call that reaches it raises `CleanupError` (rule 4), with no state check.
 - `anycompute gc` has no TTL. Each of its list calls, and each state call it makes to select sandboxes, gets 120 seconds (the cleanup clock's length) through the same wait. A call that reaches it raises `ProviderError` (exit 124) naming the provider. gc's delete and confirm calls keep the 120-second cleanup deadline.
 - The rule 3 state call (after a fired client timeout, or after an exec exit code of 137 or none) gets its own budget of 120 seconds (the cleanup clock's length) through the same wait. A state call that reaches it raises `ProviderError` (exit 124), and the delete and its confirm still run.
@@ -274,8 +274,8 @@ What the SDK does:
 
 - `close()` and the end of `run()` delete the sandbox; they never pause or stop it. They return only after the provider confirms the delete.
 - The delete and every confirm poll share one deadline of 120 seconds from the start of cleanup. Each request gets the time left.
-- The engine retries a failed delete or confirm request (for example a 502 or a 429) within that deadline. A not-found answer to the delete counts as a successful delete request on every adapter.
-- Every engine poll (the confirm, the delete retry, and the observer's marker and gone waits) follows one schedule: it sends the first request at once, then waits 1 second and doubles to a 10-second cap. On a 429 it waits `retry_after` when the provider gives one (capped at the time left), else the next step.
+- The engine retries a failed delete or confirm request (for example a 502 or a 429) within that deadline. A late reply cannot confirm a delete. A not-found answer to the delete counts as a successful delete request on every adapter.
+- Every engine poll (the confirm, the delete retry, and the observer's marker and gone waits) follows one schedule: it sends the first request at once, then waits 1 second and doubles to a 10-second cap. On a 429 it waits `retry_after` when the provider gives one (capped at the time left), else the next step. A zero delay allows one immediate retry per poll. Subsequent zero delays use the normal schedule so the poll cannot spin.
 - The engine confirms a delete only when the adapter's state call reports `gone`, never because a list no longer shows the sandbox. On `unknown` the confirm keeps polling.
 - They raise `CleanupError` when that deadline passes, on every adapter.
 - An adapter's delete holds no confirm or poll logic of its own. If it calls an SDK wait (Daytona `wait=True`, Modal `terminate(wait=True)`), that wait gets only the time left on that deadline, and the engine still confirms through the adapter's state call.
@@ -295,8 +295,9 @@ Tests:
 What the SDK does:
 
 - Any failure after the provider returns a sandbox ID runs the delete and its confirm before the error leaves. This covers the post-create `mkdir`, a write, runtime detection, a read-back, docker's start and an interrupt, in `run()` and in the `Sandbox` constructor. The error carries the `sandbox_id`.
-- An adapter create that made a resource and then failed raises `ProviderError` with the `sandbox_id`, and the engine deletes it. A nonzero exit from the post-create `mkdir` raises `ProviderError`.
-- An interrupt while create is in flight is a lost create: `ProviderError` with `sandbox_may_exist` and the copyable gc command, and the CLI exits 130.
+- On an open `Sandbox`, a provider operation failure also closes the sandbox. A rejected local argument does not close it, so the caller can correct the argument and try again.
+- An adapter create that made a resource and then failed raises `ProviderError` with the `sandbox_id`. The engine uses the exact returned ID for provider calls and attempts cleanup once. Displayed IDs can be redacted. A nonzero exit from the post-create `mkdir` raises `ProviderError`.
+- An interrupt after create dispatch, before the engine learns the sandbox ID, is a lost create: `ProviderError` with `sandbox_may_exist` and the gc hint, and the CLI exits 130.
 - `CleanupError` carries the completed `Result` (when the job finished), the sandbox ID and the run ID, so the user keeps the output.
 - In `run()` and in `Sandbox.__exit__`, when an exception is already in flight, the original exception propagates and the cleanup failure is never hidden: the engine sets the `CleanupError` as the original's `cleanup_error` attribute and adds its redacted message with `add_note`, never through `__cause__`.
 - Cleanup also runs when a `KeyboardInterrupt` arrives during a command. After the cleanup, the `KeyboardInterrupt` propagates with the run ID and the sandbox ID attached (and a `cleanup_error` when the delete failed), and the CLI exits 130.
@@ -331,7 +332,7 @@ Tests:
 
 What the SDK does:
 
-- The engine creates `/tmp/anycompute`, and the parent folders of any nested `files=` path, in the sandbox after create (one `mkdir -p` through the adapter's exec) and passes it as the working directory to every exec. `Sandbox.write` to a nested path first runs one `mkdir -p` for its parent folder.
+- The engine creates `/tmp/anycompute`, and the parent folders of any nested `files=` path, in the sandbox after create (one `mkdir -p` through the adapter's exec). This first exec uses `/` because the working directory does not exist yet. All later exec calls use `/tmp/anycompute` as their working directory. `Sandbox.write` to a nested path first runs one `mkdir -p` for its parent folder.
 - Uploads are written there, and read-back paths resolve from it.
 - A read path that does not exist, or is not a regular file (such as a directory), is left out of `files` and listed in `missing`.
 - A sandbox path is a `files=` key, a read path, or a read-back path in `task.toml`. It raises `InvalidPathError` before create when it is absolute, has a `..` part (after a split on `/`), is empty, ends in `/` or holds a NUL byte. So does a `files=` key that is the parent folder of another key. A nested relative path such as `sub/in.txt` is allowed, and a name such as `a..b.txt` is not a `..` part. A `Sandbox.write` or `Sandbox.read` path goes through the same check and raises `InvalidPathError` before the provider call.
@@ -373,6 +374,7 @@ What the SDK does:
 - Error attributes: every anycompute error raised after a create has `sandbox_id`, `run_id` and `sandbox_seconds`; `SandboxTimeoutError` also has the partial `stdout` and `stderr`; `CleanupError` has `result` (the completed Result, or None); `RateLimitError` has `retry_after`; `ProviderError` has `sandbox_may_exist` and `internal`.
 - The waited-call helper wraps an exception that the adapter's error mapping does not cover (for example a `TypeError` in adapter code) in a redacted `ProviderError` with `internal = True`. A mapped provider error has `internal = False`.
 - No error carries a key value. The engine replaces each provider key value with `***` in the provider's error text, keeps that redacted text on its own error, and raises it outside the provider's exception handler, so no raw provider exception stays attached.
+- An invalid provider reply raises `ProviderError` rather than becoming a successful result. In a provider timeout error, invalid partial output becomes empty text. A retry delay is absent unless it is a finite nonnegative number.
 
 Tests:
 
@@ -428,7 +430,7 @@ Tests:
 
 What the SDK does:
 
-- The engine holds each create until the provider's documented start rate allows it. It uses one locked token bucket per provider with a capacity of 1, so creates on one provider are at least 60/rate seconds apart (5 seconds at 12 a minute). A caller reserves its slot under the lock and sleeps outside it, so no caller holds the lock while it waits.
+- The engine holds each create until the provider's documented start rate allows it. The caller reserves a slot, and the worker rechecks the spacing at dispatch (5 seconds at 12 a minute). Pacing waits do not consume the create budget. The pacer lock is not held during a sleep or a provider call. This spaces engine dispatches, not network delivery.
 - The rate comes from the adapter's `creates_per_minute` cap.
 - A user overrides it in two ways:
   - `ANYCOMPUTE_CREATES_PER_MINUTE` sets the rate for every provider in the process (providers with no documented rate are then paced too). The engine reads it once, at the first create.
@@ -454,11 +456,11 @@ What the SDK does:
 gc rules:
 
 - `anycompute gc --run <id>` deletes that run's leftovers: every sandbox of the run the user names, running or not.
-- `anycompute gc --all` deletes only sandboxes with the `anycompute=1` label whose create time (from the provider's list API) plus their `anycompute-ttl` plus the maximum grace period is before now. The grace period also covers clock skew up to 120 seconds.
-- On an adapter whose caps declare `pre_start_window: partial` (docker, whose timer starts only when the container starts), `gc --all` also requires the sandbox not to be running (created and never started, or exited). A running docker container ends itself at its TTL. A sandbox whose state is `unknown` counts as running, so gc keeps it (reason `running`).
-- A labeled sandbox with no TTL label, or with no create time in the list (Modal), is kept. A malformed `anycompute-ttl` label counts as no TTL label (`no_ttl_label`).
-- gc deletes one sandbox at a time and continues past a failed delete: that row's action is `failed`, the other deletes still run, and gc exits 125 at the end.
-- So without `--force`, `gc --all` never kills a running job. `--force` is required to delete a sandbox that these rules keep, and it can delete a running sandbox.
+- `anycompute gc --all` requires the `anycompute=1` label and a valid create time whose sum with `anycompute-ttl` and the maximum grace period is before now. The grace period also covers clock skew up to 120 seconds.
+- On every adapter, `gc --all` checks an expired candidate's state before selecting it. It selects only `stopped` or `gone`. It keeps `running` and `unknown` with reason `running`, and it keeps a failed state check with reason `state_error`. A state check and a delete are separate provider calls.
+- A missing or invalid create time is kept (`no_create_time`). A missing or malformed TTL label is kept (`no_ttl_label`).
+- gc continues after selection and deletion errors and reports all collected rows. A failed delete has action `failed` and exit 125. The first cleanup error takes precedence over state errors; otherwise the first state error determines the exit code.
+- `--force` bypasses the age and state checks, not the ownership label. It can delete a running sandbox.
 - `--dry-run` prints the list without deleting.
 - gc never deletes a sandbox without the `anycompute=1` label.
 - A provider that can only label after create declares `labels_at_create` false, and the capability table shows rule 13 as `partial` for it. All four first providers label at create.
@@ -466,7 +468,7 @@ gc rules:
 Tests:
 
 - After a killed client, `gc` finds the sandbox by its label with no file on disk.
-- Unit tests on the fake provider cover: expired, young, no TTL label, a malformed TTL label, no create time, and a running sandbox with `pre_start_window: partial` that is expired by create time (kept). They also cover a sandbox in state `unknown` with `pre_start_window: partial` that is expired by create time (kept, reason `running`).
+- Fake-provider tests cover expired and young sandboxes, missing and invalid TTLs and times, and keeping expired candidates in running or unknown state on all adapters.
 - With two expired sandboxes whose first delete fails, gc still deletes the second, reports the rows `failed` and `deleted`, and exits 125.
 - gc spares a sandbox with a matching run label but no `anycompute=1` label, under `--run` and under `--all --force`, and `--dry-run` deletes nothing.
 - A unit test checks the run-ID precedence (`run_id=`, then `ANYCOMPUTE_RUN_ID` read once, then the generated ID) and the `[a-z0-9-]{1,40}` check.
@@ -545,8 +547,10 @@ anycompute providers                                  # adapters, capability tab
 - Prints the run ID to stderr before the command starts.
 - Passes the sandbox's stdout and stderr through. With `--json` there is no pass-through: stdout holds one JSON document.
 - Writes `--read` files to `./anycompute-out/<run-id>/`, or to `<dir>/<run-id>/` with `--out <dir>`. It checks that the folder is writable before create. When it is not, the CLI raises `ConfigError` (exit 126) and makes no sandbox.
+- Readback requires POSIX directory file descriptors. The CLI does not follow symlinks in the output path. On macOS, it translates the fixed `/tmp` and `/var` aliases before opening their physical directories. It can replace a regular file with one link, but refuses a second readback that resolves to the same destination. The first saved file stays in place.
 - Exits with the sandbox command's exit code.
 - When the job finished but the delete fails, the CLI writes stdout, stderr and the `--read` files first, then exits 125.
+- A local output failure after a completed `run` or `gc` without a provider error exits 126. A cleanup failure retains exit 125 and its recovery hint, plus the local output error. The CLI still attempts stderr and file writes if workload stdout fails. If JSON stdout is unusable, it reports the error on stderr when possible and does not try to write a second document.
 
 Tests:
 
@@ -582,12 +586,13 @@ Tests:
 
 ### Copyable gc command
 
-On `CleanupError`, on a `ProviderError` with `sandbox_may_exist`, and on any error that carries a `cleanup_error`, the stderr line, and the `error` object in `--json`, include the exact command to copy: `anycompute gc --run <id> --provider <name> --dry-run`, with each value quoted with `shlex.quote`. A note says that dropping `--dry-run` deletes every sandbox of that run, running or not.
+On `CleanupError`, on a `ProviderError` with `sandbox_may_exist`, and on any error that carries a `cleanup_error`, the stderr line, and the `error` object in `--json`, include the exact command to copy: `anycompute gc --run <id> --provider <name> --dry-run`, with each value quoted with `shlex.quote`. For an ID that starts with `-`, use `--run=<id>` so the parser treats the ID as a value. A note says that dropping `--dry-run` deletes every sandbox of that run, running or not. If redaction or missing data makes the command unusable, `gc_command` is null and stderr explains why.
 
 ### JSON output
 
 - `--json` prints the Result as JSON with an `error` field that is null on success, or the error type and a redacted message.
 - stdout and stderr appear as text. Each read file appears as its path, size, SHA-256 and saved path, never its bytes.
+- JSON does not contain nonfinite numbers. If two saved file paths redact to the same key, the report omits their ambiguous entries, keeps the files, and reports the output error.
 - `verify --json` and `gc --json` print a JSON report with the same `error` field.
 
 `run --json` keys and types:
