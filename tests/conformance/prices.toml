@@ -11,7 +11,7 @@
 # The runner reserves, for each sandbox a CLI launch can create:
 #   (effective_ttl + 120 s grace) x compute_usd_per_hour / 3600
 #   + start_fee_usd
-#   + stopped_storage_usd_per_week on partial-lifetime adapters (boat.dev, Daytona)
+#   + stopped_storage_usd_per_week on partial-lifetime adapters (boat.dev)
 # Modal allows four submissions per project create. Daytona allows one.
 #
 # Modal and Daytona use their enforced project sizes. Other rates use default sizes.

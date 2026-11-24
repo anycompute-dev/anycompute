@@ -114,7 +114,7 @@ def start_runner(monkeypatch):
 
 
 def test_passes_rounded_ttl_and_accounts_for_a_workload_exit_125(start_runner):
-    suite, transport, clock = start_runner("daytona", caps=ProviderCaps(ttl_unit_s=60, lifetime="partial"))
+    suite, transport, clock = start_runner("daytona", caps=ProviderCaps(ttl_unit_s=60))
     code, report = suite.run(["exit-example"], ttl=61)
     assert code == report["exit_code"] == 125 and report["error"] is None
     assert report["effective_ttl"] == 120

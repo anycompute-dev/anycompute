@@ -91,7 +91,7 @@ def reserve_launch(
     total = _money(prior.usd_seconds, "reserved cost")
     ttls = tuple(effective_ttls)
     partial_retry = caps is not None and caps.create_retry == "partial"
-    partial_lifetime = caps.lifetime == "partial" if caps is not None else provider in {"boat", "daytona"}
+    partial_lifetime = caps.lifetime == "partial" if caps is not None else provider == "boat"
     multiplier = _PROJECT_CREATE_ATTEMPTS.get(provider, 2 if partial_retry else 1)
     max_creates = _MODAL_MAX_CREATES if provider == "modal" else MAX_CREATES
     sandboxes += multiplier * len(ttls)

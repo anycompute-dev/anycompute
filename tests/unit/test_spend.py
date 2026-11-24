@@ -36,7 +36,7 @@ def synthetic_prices(provider, **overrides):
 
 @pytest.mark.parametrize(
     ("provider", "sandboxes", "usd"),
-    [("modal", 8, "0.336"), ("boat", 2, "0.144"), ("daytona", 2, "0.144"), ("e2b", 2, "0.084")],
+    [("modal", 8, "0.336"), ("boat", 2, "0.144"), ("daytona", 2, "0.084"), ("e2b", 2, "0.084")],
 )
 def test_billing_applies_per_create_including_lifecycle_child(provider, sandboxes, usd):
     result = reserve_launch(synthetic_prices(provider), provider, Reservation(), [1, 61])
@@ -65,7 +65,7 @@ def test_division_does_not_change_the_budget_boundary():
 @pytest.mark.parametrize(("provider", "creates", "allocations", "caps"), [
     ("docker", 15, 15, ProviderCaps()),
     ("modal", 7, 28, ProviderCaps(create_retry="partial")),
-    ("daytona", 15, 15, ProviderCaps(create_retry="partial", lifetime="partial")),
+    ("daytona", 15, 15, ProviderCaps(create_retry="partial")),
 ])
 def test_project_allocation_bound_caps_logical_creates(provider, creates, allocations, caps):
     prices = load_prices()

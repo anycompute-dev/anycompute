@@ -269,7 +269,6 @@ SPEC = ProviderSpec(
     "daytona",
     ProviderCaps(
         ttl_unit_s=60,
-        lifetime="partial",
         create_retry="partial",
         exec_retry="partial",
         provider_options_allowlist=frozenset({"snapshot", "environment"}),

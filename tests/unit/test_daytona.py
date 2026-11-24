@@ -55,7 +55,7 @@ def test_create_uses_ephemeral_whole_minute_lifetime_and_labels(sdk):
     root.Daytona.assert_called_once()
     client.get.assert_not_called()
     assert daytona.SPEC.caps.ttl_unit_s == 60
-    assert daytona.SPEC.caps.lifetime == "partial"
+    assert daytona.SPEC.caps.lifetime == "hard"
     assert not daytona.SPEC.caps.live_run
 
 
