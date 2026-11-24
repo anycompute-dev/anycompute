@@ -743,7 +743,7 @@ Uses the [synchronous Boat SDK](https://docs.boat.dev/sdks/python), pinned to `b
 - Labels map to `labels` on create. List uses the label filters and reads each cursor page, with a local check of every returned label and creation time.
 - Credentials come from `BOAT_API_KEY`. Creates request private VMs with provider account secret injection and monitoring disabled. The adapter allows explicit `environment` variables and disables SDK transport retries.
 - The adapter sends a quoted shell command for the requested working directory. It checks that read-back paths name regular files, then uses the [binary file endpoints](https://docs.boat.dev/api/reference/agent/read-sandbox-file). Direct reads and writes are limited to 5 MiB.
-- Delete sends the confirm header and returns on the 202. The engine polls the returned deletion operation within the 120-second cleanup deadline. The adapter keeps the operation ID in memory during cleanup.
+- Delete sends the confirm header and returns on the 202. The engine polls the returned deletion operation within the 120-second cleanup deadline. The adapter keeps the operation ID in memory during cleanup. If a delete may have been accepted and its receipt is lost or invalid, a not-found response on retry leaves the purge unconfirmed.
 - The suite paces boat.dev creates at 6 a minute, half of the 12 starts a minute that the $20 plan allows, which is also its `creates_per_minute` cap. Project live runs remain disabled pending credentials and conformance.
 
 ### docker

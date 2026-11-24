@@ -61,7 +61,7 @@ def _error_code(error) -> str | None:
 
 class _Boat:
     def __init__(self) -> None:
-        self._deletions: dict[str, str] = {}
+        self._deletions: dict[str, str | None] = {}
 
     def _call(self, operation, *args, timeout_s: float, missing_ok: bool = False, **kwargs):
         sdk, api, http_error = _sdk()
@@ -154,13 +154,20 @@ class _Boat:
         raise ProviderError("Boat returned invalid binary file content")
 
     def delete(self, sandbox_id: str, *, timeout_s: float) -> None:
-        result = self._call("delete_sandbox", sandbox_id=sandbox_id, x_ascii_confirm_delete=sandbox_id,
-                            timeout_s=timeout_s, missing_ok=True)
-        if result is not None:
-            operation = result.operation
-            if not result.ok or operation.kind != "sandbox" or operation.target_id != sandbox_id:
+        try:
+            result = self._call("delete_sandbox", sandbox_id=sandbox_id, x_ascii_confirm_delete=sandbox_id,
+                                timeout_s=timeout_s, missing_ok=True)
+            if result is None:
+                return
+            operation = getattr(result, "operation", None)
+            if not result.ok or operation is None or operation.kind != "sandbox" or (
+                operation.target_id != sandbox_id or not operation.id
+            ):
                 raise ProviderError("Boat returned an invalid deletion receipt")
-            self._deletions[sandbox_id] = operation.id
+        except ProviderError:
+            self._deletions.setdefault(sandbox_id, None)
+            raise
+        self._deletions[sandbox_id] = operation.id
 
     def _get(self, sandbox_id: str, timeout_s: float):
         result = self._call("get", sandbox_id, timeout_s=timeout_s, missing_ok=True)
@@ -171,7 +178,10 @@ class _Boat:
         return result.sandbox
 
     def state(self, sandbox_id: str, *, timeout_s: float) -> SandboxState:
-        if operation_id := self._deletions.get(sandbox_id):
+        if sandbox_id in self._deletions:
+            operation_id = self._deletions[sandbox_id]
+            if operation_id is None:
+                return SandboxState.UNKNOWN  # A lost receipt leaves the purge unconfirmed even after a 404.
             result = self._call("get_deletion_operation", operation_id, timeout_s=timeout_s)
             if result is None or not result.ok:
                 raise ProviderError("Boat returned an invalid deletion status")

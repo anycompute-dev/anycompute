@@ -155,6 +155,29 @@ def test_cleanup_waits_for_the_deletion_receipt_to_complete(sdk):
     api.get.assert_not_called()
 
 
+@pytest.mark.parametrize("first_reply", [OSError("lost reply"), Reply(ok=True, operation=None)])
+def test_retry_404_cannot_confirm_purge_after_ambiguous_delete(sdk, first_reply):
+    api = sdk[2]
+    api.delete_sandbox.side_effect = [first_reply, HTTPFailure(404)]
+    api.get.side_effect = HTTPFailure(404)
+    adapter = boat._Boat()
+    with pytest.raises(ProviderError):
+        adapter.delete(BOX, timeout_s=120)
+    adapter.delete(BOX, timeout_s=119)
+    assert adapter.state(BOX, timeout_s=118) == SandboxState.UNKNOWN
+    api.get.assert_not_called()
+    api.get_deletion_operation.assert_not_called()
+
+
+def test_first_delete_404_allows_independent_confirmation(sdk):
+    api = sdk[2]
+    api.delete_sandbox.side_effect = api.get.side_effect = HTTPFailure(404)
+    adapter = boat._Boat()
+    adapter.delete(BOX, timeout_s=120)
+    assert adapter.state(BOX, timeout_s=119) == SandboxState.GONE
+    api.get.assert_called_once_with(BOX, _request_timeout=119)
+
+
 @pytest.mark.parametrize(("state", "expected"), [("ready", SandboxState.RUNNING), ("idle", SandboxState.RUNNING),
     ("running", SandboxState.RUNNING), ("archiving", SandboxState.UNKNOWN), ("archived", SandboxState.STOPPED),
     ("provisioned", SandboxState.UNKNOWN), (None, SandboxState.GONE)])
