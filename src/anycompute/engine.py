@@ -667,6 +667,15 @@ class Sandbox:
                 # Docker can report the exec exit before it updates the container state.
                 ctx.clock.sleep(min(1, max(0, deadline - ctx.clock.now())))
                 state = _waited_call(ctx, "state", inspect, deadline)
+            elif (ctx.provider == "daytona" and operation == "exec" and result is not None and result.exit_code is None
+                  and self._created_request is not None and start >= self._created_request + self._effective_ttl):
+                # Daytona can interrupt a session while its control plane is still deleting the sandbox.
+                expiry_deadline = min(deadline, self._work_deadline)
+                delay = 1
+                while state in (SandboxState.RUNNING, SandboxState.UNKNOWN) and ctx.clock.now() + delay < expiry_deadline:
+                    ctx.clock.sleep(delay)
+                    state = _waited_call(ctx, "state", inspect, expiry_deadline)
+                    delay = min(2 * delay, 10)
         except _CallTimeout as error:
             raise ProviderError(ctx.redact(f"{ctx.provider}: {error}"), **ctx.error_context()) from None
         if state in (SandboxState.GONE, SandboxState.STOPPED):

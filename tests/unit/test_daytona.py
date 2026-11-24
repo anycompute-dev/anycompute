@@ -36,7 +36,8 @@ def sdk(monkeypatch):
     v0 = SimpleNamespace(DaytonaError=ServiceError, SessionExecuteRequest=SimpleNamespace,
                          ListSandboxesQuery=SimpleNamespace)
     for name in ("DaytonaAuthenticationError", "DaytonaRateLimitError", "DaytonaNotFoundError", "DaytonaGoneError",
-                 "DaytonaTimeoutError"):
+                 "DaytonaTimeoutError", "DaytonaConnectionError", "DaytonaBadGatewayError",
+                 "DaytonaServiceUnavailableError"):
         setattr(v0, name, type(name, (ServiceError,), {}))
     monkeypatch.setattr(daytona, "_sdk", lambda: (sdk, v0, SimpleNamespace))
     monkeypatch.setattr(daytona, "_roots", {})
@@ -97,6 +98,18 @@ def test_session_exec_uses_posix_arguments_and_preserves_two_streams(sdk):
     assert session == process.create_session.call_args.args[0]
     process.execute_session_command.side_effect = v0.DaytonaGoneError
     assert adapter.exec("sb-one", argv, cwd="/", timeout_s=120).exit_code is None
+
+
+@pytest.mark.parametrize("error", ["DaytonaConnectionError", "DaytonaBadGatewayError", "DaytonaServiceUnavailableError"])
+def test_interrupted_session_exec_leaves_expiry_to_engine(sdk, error):
+    _, v0, client = sdk
+    adapter = daytona.SPEC.factory()
+    adapter.create(ttl=120, labels=LABELS, options={}, timeout_s=240)
+    process = client.create.return_value.process
+    process.execute_session_command.side_effect = getattr(v0, error)
+
+    assert adapter.exec("sb-one", ("sleep", "600"), cwd="/", timeout_s=240).exit_code is None
+    process.execute_session_command.assert_called_once()
 
 
 @pytest.mark.parametrize(("state", "expected"), [

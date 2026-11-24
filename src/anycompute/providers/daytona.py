@@ -194,7 +194,8 @@ class _Daytona:
                     self._session_id, v0.SessionExecuteRequest(command=command, run_async=False, suppress_input_echo=True),
                     timeout=ceil(timeout_s),
                 )
-            except (v0.DaytonaNotFoundError, v0.DaytonaGoneError, v0.DaytonaTimeoutError):
+            except (v0.DaytonaNotFoundError, v0.DaytonaGoneError, v0.DaytonaTimeoutError, v0.DaytonaConnectionError,
+                    v0.DaytonaBadGatewayError, v0.DaytonaServiceUnavailableError):
                 return RawExecResult("", "", None)
             return RawExecResult(result.stdout, result.stderr, result.exit_code)
 

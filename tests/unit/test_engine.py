@@ -221,6 +221,37 @@ def test_ambiguous_exit_checks_state(setup, state, status, error):
     assert len(adapter.ops("delete")) == 1
 
 
+@pytest.mark.parametrize(("elapsed", "state", "status", "expected"), [
+    (130, SandboxState.UNKNOWN, None, SandboxTimeoutError),
+    (130, SandboxState.RUNNING, None, SandboxTimeoutError),
+    (20, SandboxState.RUNNING, None, ProviderError),
+    (130, SandboxState.RUNNING, 124, None),
+])
+def test_daytona_waits_for_confirmed_expiry_after_interrupted_exec(setup, monkeypatch, elapsed, state, status, expected):
+    engine, adapter, clock = setup
+    monkeypatch.setattr(providers, "PROVIDERS", (replace(providers.PROVIDERS[0], name="daytona"),))
+
+    def execute():
+        clock.sleep(elapsed)
+        return RawExecResult("partial", "", status)
+
+    def inspect(sandbox_id, **kw):
+        if sandbox_id in adapter.gone or clock.now() > elapsed:
+            return SandboxState.GONE
+        return state
+
+    adapter.handlers.update(exec=on_job(execute), state=inspect)
+    if expected is None:
+        assert engine.run(["script"], provider="daytona", ttl=120).exit_code == 124
+    else:
+        with pytest.raises(expected) as caught:
+            engine.run(["script"], provider="daytona", ttl=120)
+        if expected is SandboxTimeoutError:
+            assert caught.value.stdout == "partial"
+    assert clock.now() == elapsed + (1 if expected is SandboxTimeoutError else 0)
+    assert len(adapter.ops("delete")) == 1
+
+
 @pytest.mark.parametrize("state, error", [
     (SandboxState.GONE, SandboxTimeoutError), (SandboxState.RUNNING, ProviderError),
     (SandboxState.UNKNOWN, ProviderError), (None, ProviderError),
