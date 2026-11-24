@@ -352,6 +352,7 @@ def test_cloud_sweeps_first_and_never_treats_zero_collected_tests_as_success(swe
     assert "continue-on-error" not in test_step
     assert "timeout-minutes: 60" in test_step
     assert 'ANYCOMPUTE_CONFORMANCE_LIVE: "1"' in test_step
+    assert 'MODAL_MAX_THROTTLE_WAIT: "0"' in test_step
     assert "ANYCOMPUTE_VERIFIED_ATTEMPT: ${{ needs.limit.outputs.verified_attempt }}" in test_step
     assert dict(re.findall(r"(\w+): \$\{\{ matrix\.provider == '(\w+)' && secrets\.\1", test_step)) == {
         "MODAL_TOKEN_ID": "modal", "MODAL_TOKEN_SECRET": "modal", "BOAT_API_KEY": "boat",
@@ -443,6 +444,7 @@ def test_verify_job_replaces_the_provider_matrix_and_gates_access_to_both_secret
     assert "ANYCOMPUTE_VERIFIED_ADAPTERS: ${{ needs.limit.outputs.adapters }}" in test_step
     assert "ANYCOMPUTE_VERIFIED_ATTEMPT: ${{ needs.limit.outputs.verified_attempt }}" in test_step
     assert set(re.findall(r"secrets\.(\w+)", test_step)) == {"MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET", "BOAT_API_KEY"}
+    assert 'MODAL_MAX_THROTTLE_WAIT: "0"' in test_step
     assert "uv run --locked --no-sync python -m tests.conformance.verify_workload" in test_step
     assert set(re.findall(r"uses: (\S+)", verify)) == set(re.findall(r"uses: (\S+)", cloud))
 

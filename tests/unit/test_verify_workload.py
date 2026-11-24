@@ -66,6 +66,7 @@ def context(monkeypatch):
         "ANYCOMPUTE_RUN_ID": "42",
         "ANYCOMPUTE_VERIFIED_ATTEMPT": "2",
         "ANYCOMPUTE_VERIFIED_ADAPTERS": '["modal","boat"]',
+        "MODAL_MAX_THROTTLE_WAIT": "0",
         "MODAL_TOKEN_ID": "synthetic", "MODAL_TOKEN_SECRET": "synthetic", "BOAT_API_KEY": "synthetic",
     }
     transport = Transport()
@@ -101,6 +102,7 @@ def test_verify_reserves_both_then_sweeps_then_launches_one_fixed_workload(conte
 @pytest.mark.parametrize(("key", "value"), [
     ("GITHUB_EVENT_NAME", "schedule"), ("GITHUB_RUN_ATTEMPT", "3"), ("GITHUB_REF", "refs/heads/feature"),
     ("ANYCOMPUTE_VERIFIED_ADAPTERS", '["boat","modal"]'), ("ANYCOMPUTE_RUN_ID", "43"), ("BOAT_API_KEY", ""),
+    ("MODAL_MAX_THROTTLE_WAIT", ""),
 ])
 def test_verify_refuses_before_any_calls_without_exact_counted_context(context, key, value):
     env, transport = context

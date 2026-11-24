@@ -46,7 +46,7 @@ def registry(monkeypatch):
 _OPTED_IN = {
     "ANYCOMPUTE_CONFORMANCE_PROVIDER": "modal", "ANYCOMPUTE_CONFORMANCE_LIVE": "1",
     "GITHUB_ACTIONS": "true", "GITHUB_REF": "refs/heads/main", "GITHUB_RUN_ATTEMPT": "2",
-    "ANYCOMPUTE_VERIFIED_ATTEMPT": "2",
+    "ANYCOMPUTE_VERIFIED_ATTEMPT": "2", "MODAL_MAX_THROTTLE_WAIT": "0",
 }
 
 
@@ -57,6 +57,8 @@ _OPTED_IN = {
     ("GITHUB_REF", "refs/pull/1/merge"),
     ("GITHUB_RUN_ATTEMPT", "3"),
     ("ANYCOMPUTE_VERIFIED_ATTEMPT", ""),
+    ("MODAL_MAX_THROTTLE_WAIT", ""),
+    ("MODAL_MAX_THROTTLE_WAIT", "30"),
     ("ANYCOMPUTE_CONFORMANCE_PROVIDER", "boat"),
 ])
 def test_cloud_selection_fails_closed_before_factory(registry, key, value):

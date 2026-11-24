@@ -8,7 +8,7 @@ anycompute is an open-source Python SDK and CLI. One call or one command runs a 
 
 Early development. No release is available yet, so do not depend on the API. The v0.1 design is in [docs/design.md](docs/design.md), and deferred work is in [TODOS.md](TODOS.md).
 
-The CLI has `run`, `verify`, `gc`, and `providers`. Docker, Modal, Boat, E2B, and Daytona adapters are available. The Docker conformance suite uses a local Linux container daemon. The cloud adapters have keyless tests and are awaiting their first live conformance runs. Modal also needs a verified retry allocation limit.
+The CLI has `run`, `verify`, `gc`, and `providers`. Docker, Modal, Boat, E2B, and Daytona adapters are available. The Docker conformance suite uses a local Linux container daemon. The cloud adapters have keyless tests. Project cloud conformance remains disabled pending billing and cleanup validation.
 
 See [TESTING.md](TESTING.md) for keyless checks and [CLAUDE.md](CLAUDE.md) for repository rules.
 

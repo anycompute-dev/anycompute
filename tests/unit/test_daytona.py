@@ -1,6 +1,7 @@
 import json
 import sys
 from datetime import UTC, datetime
+from http.client import RemoteDisconnected
 from shlex import split
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -28,6 +29,7 @@ class ServiceError(Exception):
 
 @pytest.fixture
 def sdk(monkeypatch):
+    monkeypatch.delenv("ANYCOMPUTE_CONFORMANCE_LIVE", raising=False)
     client = Mock()
     client.create.return_value.id = "sb-one"
     sdk = SimpleNamespace(Daytona=Mock(return_value=SimpleNamespace(v0=client)))
@@ -37,7 +39,7 @@ def sdk(monkeypatch):
                  "DaytonaTimeoutError"):
         setattr(v0, name, type(name, (ServiceError,), {}))
     monkeypatch.setattr(daytona, "_sdk", lambda: (sdk, v0, SimpleNamespace))
-    monkeypatch.setattr(daytona, "_root", None)
+    monkeypatch.setattr(daytona, "_roots", {})
     return sdk, v0, client
 
 
@@ -157,6 +159,7 @@ def test_missing_extra_reports_install_hint(monkeypatch):
 
 
 def test_real_sdk_serializes_ttl_and_reports_one_failed_post(monkeypatch):
+    monkeypatch.delenv("ANYCOMPUTE_CONFORMANCE_LIVE", raising=False)
     pytest.importorskip("daytona.v0.common.daytona")
     import urllib3
     from daytona.v0._sync import daytona as v0_client
@@ -173,7 +176,7 @@ def test_real_sdk_serializes_ttl_and_reports_one_failed_post(monkeypatch):
     monkeypatch.setattr(v0_client.SyncEventDispatcher, "ensure_connected", lambda self: None)
     monkeypatch.setattr(urllib3.PoolManager, "request", request)
     monkeypatch.setenv("DAYTONA_API_KEY", "unit-fixture")
-    monkeypatch.setattr(daytona, "_root", None)
+    monkeypatch.setattr(daytona, "_roots", {})
     with pytest.raises(QuotaError):
         daytona.SPEC.factory().create(ttl=120, labels=LABELS, options={}, timeout_s=240)
     assert len(observed) == 1
@@ -183,3 +186,94 @@ def test_real_sdk_serializes_ttl_and_reports_one_failed_post(monkeypatch):
         "daytona-small", 2, 2, 0,
     )
     assert {key: payload["labels"][key] for key in LABELS} == LABELS
+
+
+def test_byok_prepare_does_not_load_the_sdk(sdk):
+    root, _, _ = sdk
+    daytona.SPEC.factory().prepare(options={"snapshot": "custom"}, timeout_s=240)
+    root.Daytona.assert_not_called()
+
+
+@pytest.mark.parametrize(("operation", "options", "ttl", "override", "message"), [
+    ("prepare", {"snapshot": "larger"}, 120, None, "default options"),
+    ("create", {"snapshot": "larger"}, 120, None, "default options"),
+    ("create", {}, 180, None, "TTL"),
+    ("create", {}, 120, None, "verified snapshot"),
+    ("prepare", {}, 120, "DAYTONA_TARGET", "standard v0 endpoint and target"),
+    ("prepare", {}, 120, "DAYTONA_V0_API_URL", "standard v0 endpoint and target"),
+    ("prepare", {}, 120, None, "requires SDK 2.1.0"),
+])
+def test_project_rejects_unpriced_parameters_before_sdk_access(sdk, monkeypatch, operation, options, ttl, override, message):
+    root, _, _ = sdk
+    monkeypatch.setenv("ANYCOMPUTE_CONFORMANCE_LIVE", "1")
+    monkeypatch.delenv("DAYTONA_TARGET", raising=False)
+    monkeypatch.delenv("DAYTONA_V0_API_URL", raising=False)
+    if override:
+        monkeypatch.setenv(override, "unpriced-override")
+    monkeypatch.setattr(daytona, "version", lambda _: "3.0.0")
+    adapter = daytona.SPEC.factory()
+    with pytest.raises(ConfigError, match=message):
+        if operation == "prepare":
+            adapter.prepare(options=options, timeout_s=240)
+        else:
+            adapter.create(ttl=ttl, labels=LABELS, options=options, timeout_s=240)
+    root.Daytona.assert_not_called()
+
+
+@pytest.mark.parametrize("fault", ["disconnect", "redirect", "size", "inactive", "interrupted"])
+def test_project_create_uses_verified_snapshot_id_and_submits_at_most_one_post(monkeypatch, fault):
+    pytest.importorskip("daytona.v0.common.daytona")
+    from daytona.v0._sync import daytona as v0_client
+    from urllib3.connectionpool import HTTPConnectionPool
+    from urllib3.exceptions import ProtocolError
+    from urllib3.response import HTTPResponse
+
+    snapshot_id = "5f6143cf-17c4-40d0-b25b-2de21c502ce8"
+    snapshot = {
+        "id": snapshot_id, "general": True, "name": "daytona-small",
+        "state": "inactive" if fault == "inactive" else "active", "size": None,
+        "entrypoint": None, "cpu": 1, "mem": 2 if fault == "size" else 1, "disk": 3, "gpu": 0,
+        "errorReason": None, "createdAt": "2026-01-02T00:00:00Z", "updatedAt": "2026-01-02T00:00:00Z",
+        "lastUsedAt": None, "sourceSandboxId": None, "sandboxClass": "container",
+    }
+    observed = []
+
+    def request(self, conn, method, url, *, body=None, **kwargs):
+        observed.append((method, urlsplit(url).path, json.loads(body) if body else None))
+        if method == "GET":
+            assert urlsplit(url).path == "/api/snapshots/daytona-small"
+            if fault == "interrupted":
+                raise KeyboardInterrupt
+            return HTTPResponse(body=json.dumps(snapshot).encode(), status=200,
+                                headers={"Content-Type": "application/json"})
+        assert urlsplit(url).path == "/api/sandbox"
+        if fault == "disconnect":
+            raise ProtocolError("response lost", RemoteDisconnected("no reply"))
+        return HTTPResponse(status=307, headers={"Location": "/api/sandbox/replay"})
+
+    monkeypatch.setattr(v0_client.SyncEventDispatcher, "ensure_connected", lambda self: None)
+    monkeypatch.setattr(HTTPConnectionPool, "_make_request", request)
+    monkeypatch.setenv("DAYTONA_API_KEY", "unit-fixture")
+    monkeypatch.setenv("ANYCOMPUTE_CONFORMANCE_LIVE", "1")
+    monkeypatch.delenv("DAYTONA_TARGET", raising=False)
+    monkeypatch.delenv("DAYTONA_V0_API_URL", raising=False)
+    monkeypatch.setattr(daytona, "_roots", {})
+    monkeypatch.setattr(daytona, "_project_pool", None)
+    adapter = daytona.SPEC.factory()
+    should_post = fault in ("disconnect", "redirect")
+    if should_post:
+        adapter.prepare(options={}, timeout_s=240)
+        assert [method for method, _, _ in observed] == ["GET"]
+        with pytest.raises(ProviderError):
+            adapter.create(ttl=120, labels=LABELS, options={}, timeout_s=240)
+    else:
+        expected = KeyboardInterrupt if fault == "interrupted" else ProviderError
+        with pytest.raises(expected):
+            adapter.prepare(options={}, timeout_s=240)
+        with pytest.raises(ConfigError, match="verified snapshot"):
+            adapter.create(ttl=120, labels=LABELS, options={}, timeout_s=240)
+    assert [method for method, _, _ in observed] == (["GET", "POST"] if should_post else ["GET"])
+    if should_post:
+        _, _, payload = observed[-1]
+        assert (payload["snapshot"], payload["target"], payload["networkBlockAll"], payload["ttlMinutes"],
+                payload["autoDeleteInterval"]) == (snapshot_id, "us", True, 2, 0)

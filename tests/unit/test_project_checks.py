@@ -8,5 +8,6 @@ def test_pull_requests_run_keyless_checks_with_pinned_actions():
     assert re.search(r"(?m)^permissions:\n  contents: read\s*$", workflow)
     actions = re.findall(r"(?m)^\s+- uses:\s+(\S+)", workflow)
     assert actions and all(re.fullmatch(r"[^@]+@[0-9a-f]{40}", action) for action in actions)
-    assert "uv run --locked pytest" in workflow
+    assert "matrix.python == '3.12' && '--extra modal --extra daytona'" in workflow
+    assert "uv run --locked --no-sync pytest" in workflow
     assert "secrets." not in workflow
