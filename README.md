@@ -8,7 +8,7 @@ anycompute is an open-source Python SDK and CLI. One call or one command runs a 
 
 Early development. No release is available yet, so do not depend on the API. The v0.1 design is in [docs/design.md](docs/design.md), and deferred work is in [TODOS.md](TODOS.md).
 
-The CLI has `run`, `gc`, and `providers`. Docker, Modal, and Boat adapters are available. The Docker conformance suite uses a local Linux container daemon. Modal and Boat have keyless tests and are awaiting their first live conformance runs. Modal also needs a verified retry allocation limit.
+The CLI has `run`, `verify`, `gc`, and `providers`. Docker, Modal, and Boat adapters are available. The Docker conformance suite uses a local Linux container daemon. Modal and Boat have keyless tests and are awaiting their first live conformance runs. Modal also needs a verified retry allocation limit.
 
 See [TESTING.md](TESTING.md) for keyless checks and [CLAUDE.md](CLAUDE.md) for repository rules.
 
@@ -29,6 +29,10 @@ uv run --locked --extra docker anycompute run --provider docker -- printf 'hello
 ```
 
 The adapter uses a pinned image that contains `sleep`. It pulls the image before create if the daemon does not have it. If a client stops before the container starts, use `anycompute gc --provider docker --all --dry-run` to check for expired leftovers.
+
+## Compare providers
+
+Use `anycompute verify task.toml --providers modal,boat` to compare one task across two or more providers you have configured. Add `--json` for a machine-readable report. Add `--lifecycle` to check whether each provider ends and removes a separate sandbox after the client is killed. That check uses the provider's default options.
 
 ## License
 

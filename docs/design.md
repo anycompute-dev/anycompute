@@ -620,7 +620,7 @@ On `CleanupError`, on a `ProviderError` with `sandbox_may_exist`, and on any err
 - On an error, `error` is `{"type", "message", "sandbox_id", "run_id", "retry_after", "sandbox_may_exist", "internal", "gc_command", "cleanup_error"}`. A key that does not apply is null, and `cleanup_error` is null or `{"type", "message"}`.
 - With an error, a `run` report keeps the Result fields it has. This includes partial stdout and stderr on `SandboxTimeoutError` and the completed result on `CleanupError` or an output error after the job. Fields with no value are null. `provider` is null if none was supplied, and `run_id` is null if it could not be resolved.
 - `gc --json` prints `{"provider", "run_id", "dry_run", "sandboxes": [{"sandbox_id", "run_id", "created_at", "action", "reason"}], "error"}`. `run_id` is null for `--all`. `created_at` is an ISO 8601 UTC string, or null when the list shows none. `action` is `deleted`, `kept`, `listed` (dry run) or `failed` (its delete raised `CleanupError`). `reason` is one of `run_match`, `expired`, `young`, `no_ttl_label`, `no_create_time`, `running`, `state_error` or `force`.
-- `verify --json` prints `{"rows": [...], "summary", "anycompute_version", "source", "suite_version", "error"}`. Each row is `{"provider", "exit_code", "output", "files", "cleanup", "lifecycle", "partial_caps", "runtime", "error", "sandbox_seconds", "outside_contract", "provider_sdk_version"}`. `exit_code` and `cleanup` are `pass` or `fail`; `output` (stdout and stderr) and `files` are `pass` or `differs`; `lifecycle` is `pass`, `partial`, `fail` or null without `--lifecycle`; `partial_caps` lists the provider's rule caps that are `partial`, built from its caps; `runtime` is `{"python", "arch", "api_host"}`.
+- `verify --json` prints `{"rows": [...], "summary", "anycompute_version", "source", "suite_version", "error"}`. Each row is `{"provider", "exit_code", "output", "files", "cleanup", "lifecycle", "partial_caps", "runtime", "error", "sandbox_seconds", "outside_contract", "provider_sdk_version", "details"}`. `exit_code` and `cleanup` are `pass` or `fail`; `output` (stdout and stderr) and `files` are `pass` or `differs`; `lifecycle` is `pass`, `partial`, `fail` or null without `--lifecycle`; `partial_caps` lists the provider's rule caps that are `partial`, built from its caps; `runtime` is `{"python", "arch", "api_host"}`. The `details` object gives the reference provider and both redacted values for differing output streams, SHA-256 hashes for differing files (null for a missing file), and the lifecycle reason or default-options note when applicable. The top-level `error` repeats the first row error, or the row that was interrupted.
 
 ### verify
 
@@ -637,7 +637,7 @@ compare = "all"                    # or "exit_code"; default "all"
 [providers.modal]                  # optional; only keys on that adapter's allowlist
 environment = ["MY_TOKEN"]         # variable names only; values come from the local environment
 ```
-`anycompute verify` runs the job once per provider, one provider at a time in the `--providers` order, and reports, per provider and field:
+`anycompute verify` requires at least two distinct provider names. It runs the job once per provider, one provider at a time in the `--providers` order, and reports, per provider and field:
 
 - **Exit code:** equal to the expected exit code in `task.toml`.
 - **stdout and stderr:** equal as decoded text across providers. A difference is reported with both values, and `task.toml` can set `compare = "exit_code"` to compare only exit codes.

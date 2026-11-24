@@ -10,6 +10,7 @@ import os
 import shlex
 import stat
 import sys
+import tomllib
 from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import fields, replace
 from hashlib import sha256
@@ -18,7 +19,7 @@ from uuid import uuid4
 
 from . import providers
 from .contract import (
-    AnycomputeError, CleanupError, ConfigError, InvalidPathError, KeySources, ProviderError,
+    AnycomputeError, CleanupError, ConfigError, InvalidPathError, InvalidTTLError, KeySources, ProviderError,
     RateLimitError, Result, SandboxTimeoutError,
 )
 
@@ -58,6 +59,11 @@ def _parser():
     run.add_argument("--out", metavar="DIR")
     run.add_argument("argv", nargs=argparse.REMAINDER, metavar="-- COMMAND [ARG ...]")
 
+    verify = commands.add_parser("verify", help="compare one task across providers")
+    verify.add_argument("task", metavar="TASK.TOML")
+    verify.add_argument("--providers", required=True, metavar="NAME,NAME[,NAME...]")
+    verify.add_argument("--lifecycle", action="store_true", help="check provider lifetime after killing the client")
+
     gc = commands.add_parser("gc", help="list or delete labeled sandboxes")
     gc.add_argument("--provider", required=True)
     target = gc.add_mutually_exclusive_group(required=True)
@@ -67,7 +73,7 @@ def _parser():
     gc.add_argument("--force", action="store_true")
 
     providers = commands.add_parser("providers", help="list capabilities and key status")
-    for name, command in (("run", run), ("gc", gc), ("providers", providers)):
+    for name, command in (("run", run), ("verify", verify), ("gc", gc), ("providers", providers)):
         command.set_defaults(command=name)
         _output_flags(command)
     return parser
@@ -117,8 +123,8 @@ def _write(stream, text):
 
 
 def _print_report(report):
-    rendered = {key: value if key in ("error", "files", "sandboxes", "providers") else _redact_values(value)
-                for key, value in report.items()}
+    prepared = ("error", "files", "rows", "sandboxes", "providers", "summary")
+    rendered = {key: value if key in prepared else _redact_values(value) for key, value in report.items()}
     document = json.dumps(rendered, allow_nan=False)
     try:
         _write(sys.stdout, document + "\n")
@@ -127,7 +133,7 @@ def _print_report(report):
     return None
 
 
-def _error_details(error, provider, run_id):
+def _error_details(error, provider, run_id, *, redact=_redact):
     cleanup = getattr(error, "cleanup_error", None)
     error_run_id = getattr(error, "run_id", None)
     sandbox_id = getattr(error, "sandbox_id", None)
@@ -142,20 +148,21 @@ def _error_details(error, provider, run_id):
     target = error_run_id or run_id
     gc_command = None
     needs_gc = bool(isinstance(error, CleanupError) or sandbox_may_exist or cleanup or unconfirmed_interrupt)
-    if needs_gc and all(isinstance(value, str) and value and "***" not in value and _redact(value) == value
+    if needs_gc and all(isinstance(value, str) and value and "***" not in value and redact(value) == value
                         for value in (provider, target)):
         separator = "=" if target.startswith("-") else " "
         gc_command = f"anycompute gc --run{separator}{shlex.quote(target)} --provider {shlex.quote(provider)} --dry-run"
     return {
-        "type": type(error).__name__, "message": _redact(str(error)) or type(error).__name__,
-        "sandbox_id": _redact_values(sandbox_id), "run_id": _redact_values(error_run_id),
+        "type": type(error).__name__, "message": redact(str(error)) or type(error).__name__,
+        "sandbox_id": redact(sandbox_id) if isinstance(sandbox_id, str) else sandbox_id,
+        "run_id": redact(error_run_id) if isinstance(error_run_id, str) else error_run_id,
         "retry_after": retry_after, "sandbox_may_exist": sandbox_may_exist,
         "internal": getattr(error, "internal", None), "gc_command": gc_command,
-        "cleanup_error": {"type": type(cleanup).__name__, "message": _redact(str(cleanup))} if cleanup else None,
+        "cleanup_error": {"type": type(cleanup).__name__, "message": redact(str(cleanup))} if cleanup else None,
     }, needs_gc
 
 
-def _report_error(error, report, as_json):
+def _report_error(error, report, as_json, *, redact=_redact):
     failures = []
     if "stdout" in report:
         for key in ("sandbox_id", "run_id", "sandbox_seconds"):
@@ -167,7 +174,7 @@ def _report_error(error, report, as_json):
             if not as_json:
                 failures = _print_workload(error.stdout, error.stderr)
     provider = report.get("provider")
-    details, needs_gc = _error_details(error, provider, report.get("run_id"))
+    details, needs_gc = _error_details(error, provider, report.get("run_id"), redact=redact)
     message = f"{details['type']}: {details['message']}"
     if isinstance(error, RateLimitError):
         if details["retry_after"] is not None:
@@ -176,7 +183,7 @@ def _report_error(error, report, as_json):
             with suppress(ConfigError):
                 rate = providers.get_provider(provider).caps.creates_per_minute
                 if rate is not None:
-                    message += f"; documented start rate: {rate.value:g}/min ({_redact(rate.source)})"
+                    message += f"; documented start rate: {rate.value:g}/min ({redact(rate.source)})"
     if details["cleanup_error"]:
         message += f"; cleanup: {details['cleanup_error']['message']}"
     if details["gc_command"]:
@@ -186,7 +193,7 @@ def _report_error(error, report, as_json):
     if as_json and (failure := _print_report({**report, "error": details})):
         failures.append(failure)
     if failures:
-        message += "; " + _redact("; ".join(failures))
+        message += "; " + redact("; ".join(failures))
     line = " ".join(message.splitlines()) + "\n"
     if not as_json and report.get("stderr") and not report["stderr"].endswith("\n"):
         line = "\n" + line
@@ -288,6 +295,10 @@ def _initial_report(args) -> dict[str, object]:
     provider = getattr(args, "provider", None)
     if args.command == "run":
         return {**dict.fromkeys(field.name for field in fields(Result)), "provider": provider}
+    if args.command == "verify":
+        from .verify import _initial_report as initial_verify_report
+
+        return initial_verify_report()
     if args.command == "gc":
         return {"provider": provider, "run_id": args.run_id, "dry_run": args.dry_run, "sandboxes": []}
     return {"providers": []} if args.command == "providers" else {}
@@ -358,6 +369,99 @@ def _run(args, report, as_json):
             raise
         _publish_result(result, report, output, directory, as_json)
     return result.exit_code
+
+
+def _task_strings(table, key, default):
+    values = table.get(key, default)
+    if not isinstance(values, list) or any(not isinstance(value, str) or "\0" in value for value in values):
+        raise ConfigError(f"task.toml {key} must be an array of strings")
+    return values
+
+
+def _task_options(table):
+    options = table.get("providers", {})
+    if not isinstance(options, dict):
+        raise ConfigError("task.toml providers must be a table")
+    for name, entry in options.items():
+        if not isinstance(entry, dict):
+            raise ConfigError("Each task.toml provider entry must be a table")
+        if "environment" in entry:
+            variables = _task_strings(entry, "environment", [])
+            environment = {}
+            for variable in variables:
+                if not variable or "=" in variable or variable not in os.environ:
+                    raise ConfigError(f"Missing environment variable {variable!r} for provider {name!r}")
+                environment[variable] = os.environ[variable]
+            entry["environment"] = environment
+    return options
+
+
+def _load_task(path, run_id):
+    from . import engine, verify
+
+    try:
+        with path.open("rb") as file:
+            table = tomllib.load(file)
+    except (OSError, ValueError) as error:
+        raise ConfigError(f"Cannot read task file {str(path)!r}: {error}") from None
+    if any(key not in ("command", "inputs", "read", "ttl", "exit_code", "compare", "providers") for key in table):
+        raise ConfigError("task.toml contains an unknown setting")
+    command = _task_strings(table, "command", None)
+    read = _task_strings(table, "read", [])
+    inputs = _task_strings(table, "inputs", [])
+    if any(not value or Path(value).is_absolute() for value in inputs):
+        raise InvalidPathError("task.toml inputs must be paths relative to the task file")
+    ttl, exit_code, compare = table.get("ttl", 300), table.get("exit_code", 0), table.get("compare", "all")
+    if type(ttl) is not int or ttl < 1:
+        raise InvalidTTLError("task.toml ttl must be an integer of at least 1 second")
+    if type(exit_code) is not int or compare not in ("all", "exit_code"):
+        raise ConfigError('task.toml exit_code must be an integer and compare must be "all" or "exit_code"')
+    options = _task_options(table)
+    ctx, _ = engine._provider_context("verify", run_id, options)
+    try:
+        files = _local_files([path.parent / value for value in inputs])
+    except InvalidPathError as error:
+        raise InvalidPathError(ctx.redact(str(error))) from None
+    return verify._Task(command, files, read, ttl, exit_code, compare, options), ctx
+
+
+def _verify(args, report, as_json):
+    from . import engine, verify
+
+    names = [name.strip() for name in args.providers.split(",")]
+    if len(names) < 2 or "" in names or len(names) != len(set(names)):
+        raise ConfigError("--providers needs at least two distinct provider names")
+    specs = [providers.get_provider(name) for name in names]
+    run_id = engine._resolve_run_id()
+    task, ctx = _load_task(Path(args.task), run_id)
+    print(f"run_id: {ctx.redact(run_id)}", file=sys.stderr, flush=True)
+    outcomes, summary, code = verify._run(task, specs, ctx, check_lifecycle=args.lifecycle)
+    report.update(rows=[outcome.row for outcome in outcomes], summary=summary)
+    first_error_code = None
+    for spec, outcome in zip(specs, outcomes):
+        if (error := outcome.error) is None:
+            continue
+        row = outcome.row
+        row["error"], _ = _error_details(error, spec.name, run_id, redact=ctx.redact)
+        error_code = _report_error(error, {"provider": spec.name, "run_id": run_id}, False, redact=ctx.redact)
+        if first_error_code is None or error_code == 130:
+            report["error"] = row["error"]
+            first_error_code = error_code
+    if not as_json:
+        try:
+            for row in report["rows"]:
+                keys = ("exit_code", "output", "files", "cleanup", "lifecycle", "runtime", "partial_caps")
+                checks = ", ".join(f"{key}={row[key]}" for key in keys if row[key] not in (None, []))
+                _write(sys.stdout, f"{row['provider']}: {checks}\n")
+                if row["details"]:
+                    _write(sys.stdout, f"  {json.dumps(row['details'], allow_nan=False)}\n")
+            _write(sys.stdout, summary + "\n")
+        except (OSError, ValueError) as error:
+            failure = ConfigError(ctx.redact(f"Cannot write verify report to stdout: {error}"))
+            if first_error_code is None:
+                raise failure from None
+            _report_error(failure, {}, False, redact=ctx.redact)
+    return first_error_code if first_error_code is not None else code
 
 
 def _gc(args, report, as_json):
@@ -449,12 +553,17 @@ def main(argv: list[str] | None = None) -> int:
         with _verbose(getattr(args, "verbose", False)):
             if args.command == "run":
                 code = _run(args, report, as_json)
+            elif args.command == "verify":
+                code = _verify(args, report, as_json)
             elif args.command == "gc":
                 code = _gc(args, report, as_json)
             else:
                 code = _list_providers(report, as_json)
-        if as_json and (failure := _print_report({**report, "error": None})):
-            return _report_error(ConfigError(failure), report, False)
+        if as_json:
+            report.setdefault("error", None)
+            if failure := _print_report(report):
+                write_code = _report_error(ConfigError(failure), report, False)
+                return code if report["error"] else write_code
         return code
     except (AnycomputeError, KeyboardInterrupt) as error:
         parsed = getattr(error, "parsed", None)
