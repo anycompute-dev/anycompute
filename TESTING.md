@@ -53,7 +53,7 @@ Daytona reports `feature unavailable` if its warm-pool list returns HTTP 404 aft
 
 For the initial E2B conformance trial, dispatch **Conformance** on `main` with `adapters=e2b` and `verify=false`. The counted job checks the current `base` resources before launching. Weekly E2B runs require a separate opt-in through the provider capability.
 
-The authorized one-time Daytona trial uses **Conformance** on `main` with `adapters=daytona` and `verify=false`. CI accepts one attempt during November 2026 UTC. The job checks the snapshot, warm pools, and key permissions before it allocates. Weekly Daytona conformance requires a separate opt-in.
+The authorized Daytona verification uses **Conformance** on `main` with `adapters=daytona` and `verify=false`. CI requires the original trial and accepts one fresh Daytona-only dispatch during November 2026 UTC. The job checks the snapshot, warm pools, and key permissions before it allocates. Weekly Daytona conformance requires a separate opt-in.
 
 The protected `Conformance` workflow can compare one fixed workload on Modal and boat.dev. Set `adapters` to `modal,boat` and enable `verify` on a manual main-branch dispatch after both adapters are enabled and their credentials are configured. The comparison job records its JSON report in the step log.
 

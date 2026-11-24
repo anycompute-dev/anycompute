@@ -155,20 +155,27 @@ def test_manual_e2b_counts_only_named_dispatches(gate, history, capsys):
     assert not output.exists()
 
 
-@pytest.mark.parametrize(("attempt", "prior", "month", "error"), [
-    (1, False, 11, None),
-    (1, True, 11, "daytona: 2 extra runs exceed 1"),
-    (2, False, 11, "daytona: 2 extra runs exceed 1"),
-    (1, False, 12, "limited to November 2026 UTC"),
+@pytest.mark.parametrize(("adapters", "attempt", "prior_title", "extra", "month", "error"), [
+    ("daytona", 1, "adapters=daytona", False, 11, None),
+    ("daytona", 1, None, False, 11, "requires the original trial and one fresh dispatch"),
+    ("daytona", 1, "adapters=boat", False, 11, "requires the original trial and one fresh dispatch"),
+    ("daytona", 1, "adapters=daytona", True, 11, "requires the original trial and one fresh dispatch"),
+    ("daytona", 2, "adapters=daytona", False, 11, "requires the original trial and one fresh dispatch"),
+    ("daytona,e2b", 1, "adapters=daytona", False, 11, "naming only Daytona"),
+    ("daytona", 1, "adapters=daytona", False, 12, "limited to November 2026 UTC"),
 ])
-def test_daytona_trial_allows_one_attempt_in_the_authorized_month(gate, history, capsys, attempt, prior, month, error):
+def test_daytona_allows_one_fresh_verification_after_the_trial(gate, history, capsys, adapters, attempt, prior_title, extra, month, error):
     env, output = gate
-    env.update(REQUESTED_ADAPTERS="daytona", GITHUB_RUN_ATTEMPT=str(attempt))
+    env.update(REQUESTED_ADAPTERS=adapters, GITHUB_RUN_ATTEMPT=str(attempt))
     date = f"2026-{month:02d}-23T00:00:00Z"
     weekly = run(1, attempt=5, event="schedule", title="Weekly conformance") | {"created_at": date}
-    past = run(2, attempt=1, title="adapters=daytona") | {"created_at": date}
-    trial = run(attempt=attempt, title="adapters=daytona") | {"created_at": date}
-    history[0].append(Reply(weekly, *([past] if prior else []), trial))
+    attempts = [weekly]
+    if prior_title:
+        attempts.append(run(45435204082, attempt=1, title=prior_title) | {"created_at": date})
+    if extra:
+        attempts.append(run(2, attempt=1, title="adapters=daytona") | {"created_at": date})
+    attempts.append(run(attempt=attempt, title=f"adapters={adapters}") | {"created_at": date})
+    history[0].append(Reply(*attempts))
 
     assert run_gate(env, now=NOW.replace(month=month)) == (1 if error else 0)
     if error:
