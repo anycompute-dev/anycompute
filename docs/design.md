@@ -97,7 +97,7 @@ The conformance suite uses only ordinary public API calls (create, exec, files, 
 ### Spend rules for the conformance runner
 
 - **Monthly budget:** $50 per provider per month on the project's accounts. CI keeps no spend record, so the per-run budget, the run limit and the cleanup-failure stop below keep this budget. It is a hard cap only where the provider has its own spend limit.
-- **Worst-case reservation:** the suite drives the CLI as a subprocess, so before each CLI launch the conformance runner (`tests/conformance/runner.py`) reserves the worst-case cost of every sandbox that launch can create (one per provider for `run` and `verify`, plus one per provider for the `verify --lifecycle` child): the `effective_ttl` plus the maximum grace period, at the provider's price for the default size, plus any start fee, from `tests/conformance/prices.toml`. On partial-lifetime adapters (boat.dev, Daytona) the reservation also adds one week of the provider's stopped-storage price per sandbox. On an adapter whose `create_retry` cap is `partial` (Modal), it reserves two sandboxes per create.
+- **Worst-case reservation:** the suite drives the CLI as a subprocess, so before each CLI launch the conformance runner (`tests/conformance/runner.py`) reserves the worst-case cost of every sandbox that launch can create (one per provider for `run` and `verify`, plus one per provider for the `verify --lifecycle` child): the `effective_ttl` plus the maximum grace period, at the provider's price for the default size, plus any start fee, from `tests/conformance/prices.toml`. On partial-lifetime adapters (boat.dev, Daytona) the reservation also adds one week of the provider's stopped-storage price per sandbox. On an adapter whose `create_retry` cap is `partial`, it reserves two sandboxes per create. Project live runs require evidence that this covers the SDK’s possible allocations.
 - **Duplicate check:** after each launch the runner lists the run's sandboxes (the run ID and its `-lc` and `-kc` child run IDs) by label. If it finds more than it reserved, it stops the run, runs gc for those run IDs, and fails the workflow. A runner unit test uses a fake that creates a duplicate.
 - **Per-run budget:** the runner refuses a launch that would pass a budget of $2 per adapter per run, and the refusal fails the workflow with the adapter and the amount named.
 - **Run limit:** the workflow allows the weekly run plus at most 4 other runs (manual dispatches and re-run attempts) a month per adapter. So an adapter gets at most 9 runs a month: $18 at most, under the $50 budget. On boat.dev the $20 plan is not an extra cost: every dollar comes back as VM time, so the 9 runs fit inside the plan's $20 a month (docs.boat.dev/pricing, checked 2026-11-23). GitHub's run history is the count, because the runs API does not return dispatch inputs:
@@ -118,7 +118,7 @@ The conformance suite uses only ordinary public API calls (create, exec, files, 
   - The gate refuses a re-run of a previous month's run.
   - A 403, a missing `workflow_runs` list, fewer runs than `total_count`, a parse error, and a missing or null `display_title`, `event` or `run_attempt` each fail closed, with one test per case.
   - A unit test reads `conformance.yml` and checks the gate's permissions, each test job's `needs:` and its attempt check.
-- **Run size:** the scheduled suite runs once a week. One run creates at most 15 sandboxes per adapter with a TTL of at most 120 seconds, so its worst case per adapter is 15 x (120 + 120) seconds = 1 sandbox-hour. At the default-size prices in `tests/conformance/prices.toml` (checked 2026-11-23), one run costs at most $0.17 on E2B, $0.07 on Daytona, $0.04 on boat.dev and $0 on docker. On Modal the reservation is 2 sandbox-hours, because it counts two sandboxes per create, so a run costs at most $0.04. Start fees are $0 at the suite's pace. Stopped storage is also $0: Daytona deletes an ephemeral sandbox on stop, and boat.dev keeps a stopped disk free for at least 14 days.
+- **Run size:** the scheduled suite runs once a week. One run creates at most 15 sandboxes per adapter with a TTL of at most 120 seconds, so its worst case per adapter is 15 x (120 + 120) seconds = 1 sandbox-hour. At the default-size prices in `tests/conformance/prices.toml` (checked 2026-11-23), one run costs at most $0.17 on E2B, $0.07 on Daytona, $0.04 on boat.dev and $0 on docker. The partial-retry reservation counts two sandboxes per create. That gives estimates of $0.04 on Modal, $0.34 on E2B, and $0.14 on Daytona at the same default-size rates. Start fees are $0 at the suite's pace. Stopped storage is also $0: Daytona deletes an ephemeral sandbox on stop, and boat.dev keeps a stopped disk free for at least 14 days.
 - **Stop on cleanup failure:** a failed delete keeps billing past the reservation. So after the first launch whose `--json` output reports a failed cleanup, the runner stops launching in that run. A failed cleanup is an `error` of type `CleanupError` or a non-null `cleanup_error`, at the top level or in any `verify` row. The runner then runs gc for the run ID and its `-lc` and `-kc` child run IDs, and fails the workflow. It reads the JSON, not the exit code, because exit codes can collide (see Exit codes). Output that is not one JSON document, or a CLI crash, counts as a failed cleanup. Runner unit tests: a non-null `cleanup_error` in one `verify` row stops launches; a command's own exit 125 with a null `error` does not; non-JSON output and a CLI crash fail closed.
 - **Sweep earlier leftovers:** before its first create, each keyed job runs `gc --all --provider <adapter>` for the project's labeled sandboxes. If gc reports any failed delete, the job creates nothing and fails.
 - **Job timeout:** the test step has its own `timeout-minutes`, inside the job limit. An `if: always()` step after it runs gc on each adapter for the workflow's run ID and its `-lc` and `-kc` child run IDs.
@@ -396,7 +396,7 @@ What the SDK does:
 
 - The SDK never retries a create automatically: a retried create after a lost response would make a second sandbox. It does not retry exec.
 - Each adapter also turns off its provider SDK's own retries and its transport (HTTP or gRPC connection) retries for create and exec through the SDK's client options where the SDK allows it, never by changing the user's environment.
-- An adapter that cannot (Modal today) declares `create_retry: partial` and `exec_retry: partial`. A duplicate it may create carries the same labels and TTL, so the provider ends it and gc finds it. The spend runner reserves for it and counts it (see Spend rules).
+- An adapter that cannot (Modal, E2B and Daytona today) declares `create_retry: partial` and `exec_retry: partial`. A duplicate an adapter may create carries the same labels and TTL, so the provider ends it and gc finds it. The spend runner reserves for it and counts it (see Spend rules).
 - The caller handles `RateLimitError` with its `retry_after`.
 
 Tests:
@@ -728,13 +728,15 @@ Official `e2b` Python SDK 2.64.0. See the [Python SDK source](https://github.com
 
 ### Daytona
 
-Official `daytona` Python SDK.
+Official `daytona[v0-sdk]` Python SDK 2.1.0 through the `v0` namespace. See the [SDK reference](https://www.daytona.io/docs/en/python-sdk/) and [sandbox lifecycle guide](https://www.daytona.io/docs/en/sandboxes/).
 
 - TTL maps to `ttl_minutes` (whole minutes, so `ttl_unit_s` is 60). The Daytona SDK reference documents it as a wall-clock limit from creation: Daytona destroys the sandbox at that limit, even a stopped one (checked 2026-11-23). The adapter sets `auto_stop_interval` to the same minutes and creates the sandbox as ephemeral.
 - Its lifetime stays `partial` until the live lifetime and kill-client tests show a delete at the TTL (see Declared gaps).
 - Labels map to `labels`.
-- Delete maps to delete. Its SDK wait gets only the time left on the engine's cleanup deadline.
-- The adapter pins its SDK version (the package moved to the daytona/clients repository at version 2.x) and records the namespace it uses.
+- Delete submits the request with the remaining cleanup budget. The engine confirms independently.
+- The adapter uses the `daytona-small` snapshot by default. The `snapshot` and `environment` options may override the default workload setup.
+- V0 session exec returns separate stdout and stderr. Each command runs in a fresh POSIX shell in the requested working directory. The session lives only for the lifetime of its sandbox.
+- The SDK does not expose a retry control for its v0 transport. Its reconnect retries are declared partial. Project live runs await initial validation through protected CI.
 
 ### boat.dev
 

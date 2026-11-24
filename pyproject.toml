@@ -15,7 +15,8 @@ docker = ["docker>=7.2"]
 modal = ["modal>=1.6.4,<2"]
 boat = ["boat-sdk==1.13.0"]
 e2b = ["e2b==2.64.0"]
-all = ["docker>=7.2", "modal>=1.6.4,<2", "boat-sdk==1.13.0", "e2b==2.64.0"]
+daytona = ["daytona[v0-sdk]==2.1.0"]
+all = ["docker>=7.2", "modal>=1.6.4,<2", "boat-sdk==1.13.0", "e2b==2.64.0", "daytona[v0-sdk]==2.1.0"]
 
 [project.scripts]
 anycompute = "anycompute.cli:main"

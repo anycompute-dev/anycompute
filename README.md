@@ -8,7 +8,7 @@ anycompute is an open-source Python SDK and CLI. One call or one command runs a 
 
 Early development. No release is available yet, so do not depend on the API. The v0.1 design is in [docs/design.md](docs/design.md), and deferred work is in [TODOS.md](TODOS.md).
 
-The CLI has `run`, `verify`, `gc`, and `providers`. Docker, Modal, Boat, and E2B adapters are available. The Docker conformance suite uses a local Linux container daemon. The cloud adapters have keyless tests and are awaiting their first live conformance runs. Modal also needs a verified retry allocation limit.
+The CLI has `run`, `verify`, `gc`, and `providers`. Docker, Modal, Boat, E2B, and Daytona adapters are available. The Docker conformance suite uses a local Linux container daemon. The cloud adapters have keyless tests and are awaiting their first live conformance runs. Modal also needs a verified retry allocation limit.
 
 See [TESTING.md](TESTING.md) for keyless checks and [CLAUDE.md](CLAUDE.md) for repository rules.
 
@@ -22,6 +22,7 @@ The Python API supports only the names in `anycompute.__all__`. For the CLI, a c
 | `modal` | gVisor container | Modal SDK credentials | Hard, up to 24 hours. The SDK may retry creates and execs. |
 | `boat` | Virtual machine | `BOAT_API_KEY` | Partial. The VM stops at its TTL and retains a disk snapshot until cleanup. |
 | `e2b` | Firecracker microVM | `E2B_API_KEY` | Hard, up to one hour. Not run live by the project yet. |
+| `daytona` | Linux container | Daytona SDK credentials | Partial, with whole-minute TTL. Not run live by the project yet. |
 
 Use Docker only for workloads you trust. A container is not a boundary for untrusted code. Start a local Docker daemon and run this from the repository:
 
