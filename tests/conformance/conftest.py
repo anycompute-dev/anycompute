@@ -7,7 +7,13 @@ import pytest
 
 from anycompute import engine
 from anycompute.lifecycle import _Observer
+from tests.conformance.report import ConformanceReport
 from tests.conformance.runner import TEST_TIMEOUT_S, ConformanceRunner, select_provider
+
+
+def pytest_configure(config):
+    if path := os.environ.get("ANYCOMPUTE_CONFORMANCE_REPORT"):
+        config.pluginmanager.register(ConformanceReport(path, os.environ))
 
 
 @pytest.fixture(scope="session")

@@ -65,6 +65,7 @@ def test_kill_client_waits_for_empty_ready_file_then_observes_expiry_and_cleans(
         observer=Observer(), cleanup=lambda run_id: events.append(("gc", run_id)), clock=clock,
     )
     assert (result.run_id, result.sandbox_id, result.status, result.elapsed_s) == (child_id, "box", "pass", 3)
+    assert result.deleted_elapsed_s == 3
     assert events == [
         ("launch", child_id, 10), ("list", child_id, 10), ("read", "box", "ready", 8, None),
         ("read", "box", "ready", 7, b""), "kill", ("state", "box", 127), ("gc", child_id),
@@ -107,6 +108,7 @@ def test_no_marker_by_ttl_interrupts_without_sigkill_and_runs_child_gc():
         observer=Observer(), cleanup=lambda run_id: events.append(("gc", run_id)), clock=clock,
     )
     assert (result.status, result.elapsed_s, result.reason) == ("fail", 3, "no marker by the TTL")
+    assert result.deleted_elapsed_s is None
     assert events == [("missing", 3), ("missing", 2), signal.SIGINT, ("gc", "a" * 37 + "-lc")]
 
 
@@ -127,13 +129,18 @@ def test_partial_expiry_requires_a_confirmed_child_delete(cleanup_state):
             return cleanup_state if ("gc", "round-lc") in events else SandboxState.STOPPED
 
     def check():
+        def cleanup(run_id):
+            clock.sleep(2)
+            events.append(("gc", run_id))
+
         return _kill_client(
             "round", effective_ttl=10, lifetime="partial", suffix="-lc", launch=lambda *_: Child(events),
-            observer=Observer(), cleanup=lambda run_id: events.append(("gc", run_id)), clock=clock,
+            observer=Observer(), cleanup=cleanup, clock=clock,
         )
 
     if cleanup_state == SandboxState.GONE:
-        assert check().status == "partial"
+        outcome = check()
+        assert (outcome.status, outcome.elapsed_s, outcome.deleted_elapsed_s) == ("partial", 0, 2)
     else:
         with pytest.raises(CleanupError) as failure:
             check()

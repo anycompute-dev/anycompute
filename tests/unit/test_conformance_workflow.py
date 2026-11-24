@@ -261,7 +261,9 @@ def test_every_pull_request_runs_keyless_docker_conformance():
     assert "uv sync --locked --python 3.12 --extra docker" in docker
     assert "persist-credentials: false" in docker
     assert "continue-on-error" not in docker
-    assert docker.rstrip().endswith("- run: uv run --locked pytest -q -m live_conformance tests/conformance")
+    suite = step(docker, "Run Docker conformance")
+    assert "run: uv run --locked pytest -q -m live_conformance tests/conformance" in suite
+    assert "github.event_name == 'push' && github.ref == 'refs/heads/main' && 'project-run' || 'user-run'" in suite
 
 
 def test_docker_pre_pull_uses_adapter_default_not_a_copied_tag():
@@ -302,7 +304,8 @@ def test_workflow_keeps_the_history_gate_keyless_and_passes_only_its_matrix():
     assert "timeout-minutes: 90" in cloud and "fail-fast: false" in cloud
     assert "uv sync --locked --python 3.12 --extra \"$ANYCOMPUTE_CONFORMANCE_PROVIDER\"" in cloud
     baseline = set(re.findall(r"uses: (\S+)", job("ci", "logic-tests")))
-    assert set(re.findall(r"uses: (\S+)", cloud)) == baseline
+    artifact = step(cloud, "Upload the conformance report")
+    assert set(re.findall(r"uses: (\S+)", cloud)) == baseline | set(re.findall(r"uses: (\S+)", artifact))
     assert set(re.findall(r"uses: (\S+)", limit)) == {action for action in baseline if "checkout" not in action}
 
 
@@ -313,6 +316,18 @@ def test_cloud_jobs_are_not_part_of_pull_request_checks():
     cloud = job("conformance", "cloud")
     condition = cloud.split("    if: >-\n", 1)[1].split("    environment:", 1)[0]
     assert "(github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')" in condition
+
+
+@pytest.mark.parametrize(("workflow", "job_name", "provider"), [
+    ("ci", "docker", "docker"), ("conformance", "cloud", "${{ matrix.provider }}"),
+])
+def test_workflow_uploads_only_the_conformance_report(workflow, job_name, provider):
+    upload = step(job(workflow, job_name), "Upload the conformance report")
+    assert "steps.suite.outcome == 'success' || steps.suite.outcome == 'failure'" in upload
+    assert "if-no-files-found: ${{ steps.suite.outcome == 'success' && 'error' || 'ignore' }}" in upload
+    assert f"name: conformance-{provider}-${{{{ github.run_attempt }}}}" in upload
+    assert "path: ${{ runner.temp }}/conformance-report.json" in upload
+    assert "secrets." not in upload
 
 
 @pytest.mark.parametrize("ref, expected", [("refs/heads/main", 0), ("refs/heads/Main", 1)])
@@ -361,12 +376,16 @@ def test_cloud_sweeps_first_and_never_treats_zero_collected_tests_as_success(swe
     fake_uv = r'''
       uv() {
         printf '%s\n' "$*"
-        if [[ "$3" == pytest ]]; then return "$SUITE"; fi
+        if [[ "$3" == pytest ]]; then
+          [[ "$ANYCOMPUTE_REPORT_SOURCE" == project-run ]] || return 1
+          [[ "$ANYCOMPUTE_CONFORMANCE_REPORT" == "$RUNNER_TEMP/conformance-report.json" ]] || return 1
+          return "$SUITE"
+        fi
         return "$SWEEP"
       }
     '''
     result = bash(fake_uv + script(test_step), ANYCOMPUTE_CONFORMANCE_PROVIDER="modal",
-                  SWEEP=str(sweep), SUITE=str(suite))
+                  SWEEP=str(sweep), SUITE=str(suite), RUNNER_TEMP="/tmp")
     calls = ["run --locked anycompute gc --all --provider modal --json"]
     if not sweep:
         calls.append("run --locked pytest -q -m live_conformance tests/conformance")
@@ -446,7 +465,10 @@ def test_verify_job_replaces_the_provider_matrix_and_gates_access_to_both_secret
     assert set(re.findall(r"secrets\.(\w+)", test_step)) == {"MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET", "BOAT_API_KEY"}
     assert 'MODAL_MAX_THROTTLE_WAIT: "0"' in test_step
     assert "uv run --locked --no-sync python -m tests.conformance.verify_workload" in test_step
-    assert set(re.findall(r"uses: (\S+)", verify)) == set(re.findall(r"uses: (\S+)", cloud))
+    upload = step(cloud, "Upload the conformance report")
+    assert set(re.findall(r"uses: (\S+)", verify)) == (
+        set(re.findall(r"uses: (\S+)", cloud)) - set(re.findall(r"uses: (\S+)", upload))
+    )
 
 
 @pytest.mark.parametrize("provider", ["modal", "boat"])
