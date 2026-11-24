@@ -8,11 +8,25 @@ anycompute is an open-source Python SDK and CLI. One call or one command runs a 
 
 Early development. No release is available yet, so do not depend on the API. The v0.1 design is in [docs/design.md](docs/design.md), and deferred work is in [TODOS.md](TODOS.md).
 
-The CLI has `run`, `gc`, and `providers`, but no Docker or cloud adapters are registered. `anycompute providers` reports `No providers registered.` The tests exercise `run` and `gc` without real sandboxes. The live conformance suite and `verify` are not implemented yet.
+The CLI has `run`, `gc`, and `providers`. Docker is the only registered adapter. The logic tests use fakes, and the Docker conformance suite uses a local Linux container daemon. No cloud adapter is registered, and `verify` is not implemented yet.
 
 See [TESTING.md](TESTING.md) for keyless checks and [CLAUDE.md](CLAUDE.md) for repository rules.
 
 The Python API supports only the names in `anycompute.__all__`. For the CLI, a command's exit code can match an anycompute error code. Scripts should use `--json` and check the `error` field to tell them apart.
+
+## Providers
+
+| Provider | Isolation | Key required | Lifetime |
+|---|---|---|---|
+| `docker` | Container on the local host kernel | No | Hard after start. A container left before start has no timer. |
+
+Use Docker only for workloads you trust. A container is not a boundary for untrusted code. Start a local Docker daemon and run this from the repository:
+
+```sh
+uv run --locked --extra docker anycompute run --provider docker -- printf 'hello\n'
+```
+
+The adapter uses a pinned image that contains `sleep`. It pulls the image before create if the daemon does not have it. If a client stops before the container starts, use `anycompute gc --provider docker --all --dry-run` to check for expired leftovers.
 
 ## License
 

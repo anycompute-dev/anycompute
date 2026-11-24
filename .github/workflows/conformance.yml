@@ -1,0 +1,127 @@
+name: Conformance
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('adapters={0}', inputs.adapters) || 'Weekly conformance' }}
+
+on:
+  schedule:
+    - cron: '23 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      adapters:
+        description: Comma-separated enabled cloud adapters, with no spaces
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: conformance-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  limit:
+    name: Check the monthly run limit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      adapters: ${{ steps.history.outputs.adapters }}
+      verified_attempt: ${{ steps.history.outputs.verified_attempt }}
+    steps:
+      - name: Check out public code
+        shell: bash
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          if [[ "$GITHUB_REF" != refs/heads/main ]]; then
+            printf '%s\n' 'Cloud conformance runs only on main.' >&2
+            exit 1
+          fi
+          git init --quiet
+          git -c credential.helper= -c http.extraHeader= fetch --no-tags --depth=1 "https://github.com/${GITHUB_REPOSITORY}.git" "$GITHUB_SHA"
+          git checkout --quiet --detach FETCH_HEAD
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: "0.9.18"
+          enable-cache: false
+      - run: uv sync --locked --python 3.12
+      - name: Count this attempt
+        id: history
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REQUESTED_ADAPTERS: ${{ inputs.adapters }}
+        run: uv run --locked python -m tests.conformance.check_run_limit
+
+  cloud:
+    name: ${{ matrix.provider }} conformance
+    needs: limit
+    if: >-
+      ${{ github.ref == 'refs/heads/main' && needs.limit.result == 'success' &&
+          (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
+          needs.limit.outputs.adapters != '' && needs.limit.outputs.adapters != '[]' }}
+    environment: conformance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: ${{ fromJSON(needs.limit.outputs.adapters) }}
+    env:
+      ANYCOMPUTE_CONFORMANCE_PROVIDER: ${{ matrix.provider }}
+      ANYCOMPUTE_RUN_ID: ${{ github.run_id }}
+    steps:
+      - name: Verify the counted attempt
+        id: attempt
+        shell: bash
+        env:
+          VERIFIED_ATTEMPT: ${{ needs.limit.outputs.verified_attempt }}
+        run: |
+          if [[ "$GITHUB_REF" != refs/heads/main || -z "$VERIFIED_ATTEMPT" || "$GITHUB_RUN_ATTEMPT" != "$VERIFIED_ATTEMPT" ]]; then
+            printf '%s\n' 'This attempt was not counted on main. Re-run all jobs on main.' >&2
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: "0.9.18"
+          enable-cache: false
+      - name: Install the adapter
+        id: install
+        timeout-minutes: 5
+        run: uv sync --locked --python 3.12 --extra "$ANYCOMPUTE_CONFORMANCE_PROVIDER"
+      - name: Sweep and run conformance
+        if: ${{ steps.attempt.outcome == 'success' }}
+        shell: bash
+        timeout-minutes: 60
+        env: &provider_env
+          ANYCOMPUTE_CONFORMANCE_LIVE: "1"
+          ANYCOMPUTE_VERIFIED_ATTEMPT: ${{ needs.limit.outputs.verified_attempt }}
+          MODAL_TOKEN_ID: ${{ matrix.provider == 'modal' && secrets.MODAL_TOKEN_ID || '' }}
+          MODAL_TOKEN_SECRET: ${{ matrix.provider == 'modal' && secrets.MODAL_TOKEN_SECRET || '' }}
+          BOAT_API_KEY: ${{ matrix.provider == 'boat' && secrets.BOAT_API_KEY || '' }}
+          E2B_API_KEY: ${{ matrix.provider == 'e2b' && secrets.E2B_API_KEY || '' }}
+          DAYTONA_API_KEY: ${{ matrix.provider == 'daytona' && secrets.DAYTONA_API_KEY || '' }}
+        run: |
+          uv run --locked anycompute gc --all --provider "$ANYCOMPUTE_CONFORMANCE_PROVIDER" --json
+          uv run --locked pytest -q -m live_conformance tests/conformance
+      - name: Clean up this run
+        if: ${{ always() && steps.attempt.outcome == 'success' && steps.install.outcome == 'success' }}
+        shell: bash
+        timeout-minutes: 20
+        env: *provider_env
+        run: |
+          status=0
+          for run_id in "$ANYCOMPUTE_RUN_ID" "${ANYCOMPUTE_RUN_ID:0:37}-lc" "${ANYCOMPUTE_RUN_ID:0:37}-kc"; do
+            uv run --locked anycompute gc --provider "$ANYCOMPUTE_CONFORMANCE_PROVIDER" --run="$run_id" --json || status=1
+          done
+          exit "$status"
