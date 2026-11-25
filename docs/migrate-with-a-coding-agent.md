@@ -13,12 +13,15 @@ on local Docker. Get approval before allocating any cloud sandbox.
 1. Find the current SDK dependency, imports and wrappers, sandbox call sites,
    provider configuration, and tests. Identify how each job executes commands,
    transfers files, handles deadlines and results, and cleans up. Trace files
-   and processes reused by later tools or requests. Keep the old SDK for paths
-   whose shared sandbox lifecycle, streaming, mounts, or isolation requirements
-   cannot be preserved. The v0.1.0 Docker adapter exposes image and environment
-   options. If the current sandbox requires networking to be disabled, keep
-   it unless the target environment enforces the same restriction. Flag these
-   gaps. Check that Python 3.11+ is available for the SDK or for invoking the CLI.
+   and processes reused by later tools or requests. Check for workspace files
+   copied across fresh sandboxes and artifacts discovered at runtime. Keep
+   automatic workspace sync on the old SDK where declared file transfers
+   cannot preserve it. Verify required CPU and memory caps and network
+   restrictions. The v0.1.0 Docker adapter exposes image and environment
+   options. Keep the old SDK where the target cannot enforce the same limits
+   or preserve required behavior such as shared sessions, streaming, or
+   mounts. Flag these gaps. Check that Python 3.11+ is available for the SDK or
+   for invoking the CLI.
 2. Run the relevant existing tests as a baseline. Start with one representative
    short-lived job and verify equivalent behavior before migrating the rest.
    Use this repository's package manager to add anycompute 0.1.0 with the
@@ -40,12 +43,18 @@ on local Docker. Get approval before allocating any cloud sandbox.
    workload's exit code. Test both an expired deadline and an ordinary exit
    such as `124`. Compare the caller-visible diagnostics with the baseline
    and report any intentional change.
-5. Preserve stdout, stderr, exit status, and missing-file behavior. A nonzero
+5. If a caller can cancel an in-flight job, test cancellation separately
+   from deadline expiry. Verify what must stop, including child processes
+   or the whole sandbox when required, and when cleanup must finish.
+   Cancelling an async wait can leave the worker and sandbox running.
+   Keep the old SDK if the target cannot preserve the required termination
+   and cleanup behavior.
+6. Preserve stdout, stderr, exit status, and missing-file behavior. A nonzero
    workload exit is a result. Handle provider and cleanup errors separately,
    retain the run ID for cleanup, and avoid replaying a job when its sandbox
    may still exist. For CLI callers, use `--json` and inspect `error` and
    `exit_code` separately.
-6. Rerun the affected tests and verify that retained paths still use the old
+7. Rerun the affected tests and verify that retained paths still use the old
    SDK. Remove that dependency only when all its callers have migrated.
    Report what changed, which tests ran and their results, and which paths
    still depend on the old SDK.
