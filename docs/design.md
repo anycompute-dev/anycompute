@@ -13,9 +13,9 @@ anycompute is an open-source Python SDK and CLI. One call or one command runs a 
 
 - The same call gives the same result shape and the same errors on every provider.
 - It gives the same lifetime and delete on every provider that can enforce them.
-- The capability table declares each gap, and a public test suite proves each claim that the table makes.
+- The capability table declares each gap, and public conformance reports record which adapters passed the live checks.
 
-The value is a stateless contract, not the number of adapters. Every create sets a lifetime that the provider enforces. Destroy is a real delete, never a pause. Results and errors have one typed form. There is no local state. An open conformance suite proves the contract in public CI against every adapter that runs live; any other adapter is marked "not run live".
+The value is a stateless contract, not the number of adapters. Every create sets a lifetime that the provider enforces. Destroy is a real delete, never a pause. Results and errors have one typed form. There is no local state.
 
 ### Why the lifecycle matters
 
@@ -74,6 +74,7 @@ The standard Python logger `anycompute` writes one DEBUG line per step (validate
 
 ### Scope of v0.1
 
+- **Provider support.** Docker, E2B, and Daytona are supported. Modal and boat.dev are available as preview extras pending live acceptance.
 - **Python 3.11 or newer.** `requires-python = ">=3.11"`; `task.toml` is read with the standard `tomllib`; Python 3.10 reached end of life in October 2026.
 - **Stateless only.** No pause, resume, snapshots, volumes, ports, or long-lived sessions.
 - **Each provider's default image, unless the user opts in.** The SDK and the project's own runs use each provider's default image. A user may opt in to an image, template or resources through `provider_options` or, for `verify`, a `task.toml` provider table, and such a run is marked `outside_contract`. `verify` records the runtime (Python version, CPU architecture) per provider so a difference is visible.
@@ -81,12 +82,12 @@ The standard Python logger `anycompute` writes one DEBUG line per step (validate
 
 ### Live runs
 
-- The project runs the live conformance suite on its own provider accounts for Modal, boat.dev, E2B and Daytona, and on docker, both locally and in the `ci.yml` docker job on every pull request.
+- Docker runs the live conformance suite locally and in the `ci.yml` Docker job on every pull request. E2B and Daytona passed the suite in protected manual CI runs.
 - It uses only ordinary, paced public API calls. It never probes or provokes provider failures (see the next section).
 - It publishes results by provider name.
 - If a provider objects, the project stops its runs on that provider, removes that provider's published results, and marks its adapter "not run live".
 - These rules cover the project's own runs: CI (the only place live runs on the project's accounts happen; see Run limit) and the public report. A user's runs on the user's own account are the user's business.
-- Every adapter's fixtures, live or not, come from the provider's published API reference, OpenAPI file, or SDK source and its own test fixtures. The project captures no fixture from live calls on its own accounts. A contributor's recording from the contributor's own account is accepted when the pull request says so. The capability table and the README label an adapter that does not run live "not run live".
+- Every adapter's fixtures, live or not, come from the provider's published API reference, OpenAPI file, or SDK source and its own test fixtures. The project captures no fixture from live calls on its own accounts. A contributor's recording from the contributor's own account is accepted when the pull request says so. The README records each adapter's release status and live conformance evidence.
 - A fixture key-scan unit test fails on any fixture with an `Authorization`, `X-API-Key` or cookie header, a key-like field, or a known key prefix.
 - Recorded provider fixtures are UTF-8 JSON under `tests/fixtures/`. Python transport fakes keep synthetic authentication values in test code.
 - docker needs no provider account. It costs $0 and is exempt from the spend runner's run limit.
@@ -175,7 +176,7 @@ Each adapter declares these caps:
 | `list_create_time` | bool | Whether its list shows a create time |
 | `isolation` | str | Its isolation level from the provider's docs, for example a microVM, a VM, or a container on the host kernel |
 | `key_sources` | environment variable names and config-file fields | Where its keys live, for redaction, the missing-key check and `anycompute providers` (empty for docker) |
-| `live_run` | bool | False marks the adapter "not run live" (see Live runs); the weekly run tests every adapter other than docker where it is true (see Run limit) |
+| `live_run` | bool | The weekly cloud suite runs adapters with this opt-in. Approved manual runs have separate eligibility (see Run limit). |
 
 The capability table is built from those caps. It is never written by hand.
 
@@ -815,10 +816,10 @@ tests/conformance/prices.toml   # Next Step 1 price record: one table per provid
 
 ## Distribution
 
-- **Package:** `anycompute` on PyPI, with the `anycompute` console script and one extra per provider. Users install only the SDKs they use: `pipx install 'anycompute[modal]'`, or run it with `uvx --from 'anycompute[modal]' anycompute run ...`. `anycompute[all]` installs every provider SDK. A missing extra raises `ConfigError`, which names the extra to install. Python 3.11 or newer.
+- **Package.** `anycompute` on PyPI has the `anycompute` console script and one extra per provider. Use `pipx install 'anycompute[docker]'` to install one extra, or `uvx --from 'anycompute[docker]' anycompute run ...` to run it. `anycompute[all]` installs every provider SDK, including previews. A missing extra raises `ConfigError`, which names the extra to install. Python 3.11 or newer.
 - **Pipeline:** GitHub Actions.
   - Unit tests and the docker conformance suite on every pull request, with no keys.
-  - Live conformance once a week and on manual dispatch, in a protected environment that holds the project's provider keys and allows deployments only from main, under the spend rules above.
+  - Approved manual runs and weekly conformance for opted-in cloud adapters use a protected environment that holds the project's provider keys and allows deployments only from main, under the spend rules above.
   - Every workflow pins third-party actions by commit SHA and sets least-privilege `permissions`.
   - `release.yml` runs on a push of a `v*` tag and checks that the tag matches the package version. A build job with no `id-token` makes the sdist and the wheel. A publish job in the `pypi` environment holds the only `id-token: write` and publishes to PyPI through trusted publishing (OIDC) with signed attestations. Before the first release, configure the `pypi` environment to allow only `v*` tags and require maintainer confirmation. The smoke run follows the publish.
 - **Post-release smoke run:** after each publish, `release.yml` installs `anycompute[docker]==<version>` from PyPI on a clean runner and runs `anycompute providers` and one docker job. A classifier in the smoke job sorts each failure into one of three outcomes:
@@ -840,16 +841,17 @@ tests/conformance/prices.toml   # Next Step 1 price record: one table per provid
 
 ## Success criteria
 
-Version 0.1 is done when all of these are true:
+1. E2B and Daytona have each passed live conformance in public CI. Declare any rule the provider cannot enforce as `partial` and follow the provider objection policy under [Live runs](#live-runs).
+2. Before the release tag, branch protection on `main` requires the full `Docker conformance` check on pull requests, including the lifecycle tests. The check passes on `main`.
+3. The Next Step 9 features and the Next Step 4 Docker work ship with their tests. The Docker suite covers the adapter and kill-client marker workload. A unit test covers the pre-start window.
+4. Version 0.1.0 is published through PyPI Trusted Publishing with signed attestations after maintainer approval. The published wheel passes the Docker smoke test.
 
-1. `uv run --extra modal --extra boat anycompute run` (from the local build, before the first publish) gives the same result shape on Modal and boat.dev for the same command.
-2. The conformance suite passes on Modal, including the kill-client test and delete verification, in the public CI on its weekly schedule.
-3. `anycompute verify` produces a report for one real workload on two cloud providers, Modal and boat.dev.
-4. boat.dev passes the suite with its `partial` rules declared.
-5. E2B and Daytona each pass the live conformance suite in the public CI, with any rule the provider cannot enforce declared `partial`. If a provider objects to the project's runs before the release, its runs stop, its results are removed, and its adapter ships as a "not run live" adapter with its fixtures from the provider's published docs (see Live runs), marked as such in the capability table and the README.
-6. Version 0.1.0 is on PyPI through trusted publishing, with a signed release.
-7. The full live conformance suite on the docker adapter, including the lifecycle tests, is a required check on every pull request (set by branch protection on main), and it passes on main.
-8. The Next Step 9 features ship with their tests. The Next Step 4 docker work (the docker adapter, its pre-start window, and the kill-client marker workload) ships with its unit tests. The docker adapter and the marker workload are also proven live by the docker suite in criterion 7, and the pre-start window by its unit test only.
+### Modal and boat.dev preview promotion
+
+- Modal passes the weekly public conformance suite, including the kill-client test and delete verification.
+- boat.dev passes the live conformance suite with its `partial` rules declared.
+- `anycompute run` from the local build gives the same result shape for the same command on both adapters.
+- `anycompute verify` produces a report for one real workload on Modal and boat.dev.
 
 ## Open question
 
@@ -869,11 +871,11 @@ Version 0.1 is done when all of these are true:
    - runtime detection (no detection call unless `runtime=True`; "unknown" for a missing interpreter);
    - 50 concurrent `run()` calls that check distinct sandbox IDs, correct run and TTL labels, and a confirmed delete for each.
 4. **Docker first.** Write the docker adapter, with its pre-start window declared `partial` and its unit test. Write the spend runner and its unit tests (a fake delete that fails: no further launch, `gc --run`, nonzero exit; a launch that would pass $2 is refused; the run-limit, duplicate-create and non-JSON cases in Spend rules). Write `conformance.yml` with its keyless run-limit gate job, the attempt check in each test job, the pre-run `gc --all` sweep, the step timeout and the `always()` gc step. Pin its third-party actions by commit SHA, and create its protected environment with a main-only deployment branch rule. Write the conformance harness and the observer, including the kill-client marker workload, the observer's read-based wait for the `ready` file, and the harness unit test. Run the harness on docker locally and in `ci.yml` until it passes. Docker runs cost $0 and have no run limit, so the harness is debugged before any Modal run is spent. Branch protection waits for Next Step 9.
-5. **Modal.** Write the Modal adapter and run the live conformance tests from Next Step 4 on it, driven through the CLI: the same suite, including the kill-client test with its marker.
-6. **boat.dev.** Add the boat.dev adapter with its declared `partial` rules and `ttl_max_s` 480.
-7. **verify.** Write `verify` and its report. After both adapters opt into weekly conformance, run the fixed workload once on Modal and boat.dev with `adapters=modal,boat` and `verify=true` in a manual dispatch of `conformance.yml`. The verify job replaces that dispatch's provider matrix and counts the attempt for both adapters. It reserves both creates before the comparison, sweeps both adapters, checks the workload and duplicate count against the report and provider inventory, and cleans up both adapters even after a failure.
+5. **Modal preview.** Run the live conformance tests from Next Step 4 on Modal, including the kill-client test with its marker, as part of preview promotion.
+6. **boat.dev preview.** Run live conformance on the boat.dev adapter with its declared `partial` rules and `ttl_max_s` 480 as part of preview promotion.
+7. **verify.** Write `verify` and its report. For preview promotion, after both adapters opt into weekly conformance, run the fixed workload once on Modal and boat.dev with `adapters=modal,boat` and `verify=true` in a manual dispatch of `conformance.yml`. The verify job replaces that dispatch's provider matrix and counts the attempt for both adapters. It reserves both creates before the comparison, sweeps both adapters, checks the workload and duplicate count against the report and provider inventory, and cleans up both adapters even after a failure.
 8. **E2B and Daytona live.** The E2B adapter (`ttl_max_s` 3600) and Daytona adapter (`ttl_minutes`) passed live conformance in protected manual CI runs. Both adapters declare hard lifetime.
-9. **Post-Modal features and branch protection.** After the Modal conformance run passes, set branch protection on main with the docker conformance job as a required check, and build these features. Add a CLI unit test for each of the copyable gc command line, the `RateLimitError` line and the verify summary line, and assertions on the report version fields, the API host in the runtime record and `Result.sandbox_seconds` in the `--json` and verify output.
+9. **Release features and branch protection.** Require the `Docker conformance` check on `main` before the v0.1.0 tag. Build these features. Add a CLI unit test for each of the copyable gc command line, the `RateLimitError` line and the verify summary line, and assertions on the report version fields, the API host in the runtime record and `Result.sandbox_seconds` in the `--json` and verify output.
    - the create pacer;
    - `provider_options` and `sb.native`;
    - report version fields;
@@ -888,4 +890,4 @@ Version 0.1 is done when all of these are true:
    - the post-release smoke run on docker, its classifier and the yank-and-patch runbook;
    - late-create reconciliation;
    - `task.toml` provider tables for `verify`.
-10. **Release.** Set up trusted publishing (the `pypi` environment with its tag rule and maintainer confirmation) and release 0.1.0, after Next Steps 6 to 9.
+10. **Release.** Verify Trusted Publishing and the GitHub `pypi` tag rule and required maintainer review. After the pre-release criteria pass and the maintainer approves, release v0.1.0 and verify the installed-wheel Docker smoke test.
