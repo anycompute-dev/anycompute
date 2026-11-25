@@ -6,9 +6,9 @@ anycompute is an open-source Python SDK and CLI. One call or one command runs a 
 
 ## Status
 
-Early development. No release is available yet, so do not depend on the API. The v0.1 design is in [docs/design.md](docs/design.md), and deferred work is in [TODOS.md](TODOS.md).
+v0.1 supports Docker, E2B, and Daytona. Modal and Boat are available as preview adapters and still await project live conformance. The `all` extra includes both previews. See the [v0.1 design](docs/design.md) and [deferred work](TODOS.md).
 
-The CLI has `run`, `verify`, `gc`, and `providers`. Docker, Modal, Boat, E2B, and Daytona adapters are available. The Docker conformance suite uses a local Linux container daemon. The cloud adapters have keyless tests. E2B and Daytona each passed all five conformance tests in manual CI runs, including lifetime and deletion after client termination. Weekly cloud conformance remains disabled. [E2B run](https://github.com/anycompute-dev/anycompute/actions/runs/45395187713) · [Daytona run](https://github.com/anycompute-dev/anycompute/actions/runs/45441305818)
+The CLI has `run`, `verify`, `gc`, and `providers`. The Docker conformance suite uses a local Linux container daemon. The cloud adapters have keyless tests. E2B and Daytona each passed all five conformance tests in manual CI runs, including lifetime and deletion after client termination. Weekly cloud conformance remains disabled. [E2B run](https://github.com/anycompute-dev/anycompute/actions/runs/45395187713) · [Daytona run](https://github.com/anycompute-dev/anycompute/actions/runs/45441305818)
 
 Download the versioned JSON report from a workflow run's artifacts. Each report contains one provider's check outcomes and available lifecycle timings. [Docker CI](https://github.com/anycompute-dev/anycompute/actions/workflows/ci.yml?query=branch%3Amain) · [Cloud conformance](https://github.com/anycompute-dev/anycompute/actions/workflows/conformance.yml)
 
@@ -18,15 +18,15 @@ The Python API supports only the names in `anycompute.__all__`. For the CLI, a c
 
 ## Providers
 
-| Provider | Isolation | Key required | Lifetime |
-|---|---|---|---|
-| `docker` | Container on the local host kernel | No | Hard after start. A container left before start has no timer. |
-| `modal` | gVisor container | Modal SDK credentials | Hard, up to 24 hours. The SDK may retry creates and execs. |
-| `boat` | Virtual machine | `BOAT_API_KEY` | Partial. The VM stops at its TTL and retains a disk snapshot until cleanup. |
-| `e2b` | Firecracker microVM | `E2B_API_KEY` | Hard, up to one hour. |
-| `daytona` | Linux container | Daytona SDK credentials | Hard, with whole-minute TTL. |
+| Provider | v0.1 status | Isolation | Key required | Lifetime |
+|---|---|---|---|---|
+| `docker` | Supported | Container on the local host kernel | No | Hard after start. A container left before start has no timer. |
+| `e2b` | Supported | Firecracker microVM | `E2B_API_KEY` | Hard, up to one hour. |
+| `daytona` | Supported | Linux container | Daytona SDK credentials | Hard, with whole-minute TTL. |
+| `modal` | Preview | gVisor container | Modal SDK credentials | Hard, up to 24 hours. The SDK may retry creates and execs. |
+| `boat` | Preview | Virtual machine | `BOAT_API_KEY` | Partial. The VM stops at its TTL and retains a disk snapshot until cleanup. |
 
-Use Docker only for workloads you trust. A container is not a boundary for untrusted code. Start a local Docker daemon and run this from the repository:
+Use Docker only for workloads you trust. A container is not a boundary for untrusted code. Start a local Docker daemon. With the package installed using the `docker` extra, run `anycompute run --provider docker -- printf 'hello\n'`. From a source checkout, run:
 
 ```sh
 uv run --locked --extra docker anycompute run --provider docker -- printf 'hello\n'
@@ -36,7 +36,7 @@ The adapter uses a pinned image that contains `sleep`. It pulls the image before
 
 ## Compare providers
 
-Use `anycompute verify task.toml --providers modal,boat` to compare one task across two or more providers you have configured. Add `--json` for a machine-readable report. Add `--lifecycle` to check whether each provider ends and removes a separate sandbox after the client is killed. That check uses the provider's default options.
+Use `anycompute verify task.toml --providers docker,e2b` to compare one task across two or more providers you have configured. Add `--json` for a machine-readable report. Add `--lifecycle` to check whether each provider ends and removes a separate sandbox after the client is killed. That check uses the provider's default options.
 
 ## What your provider can see
 
@@ -58,7 +58,9 @@ The adapter details list each provider's resource and cleanup calls. [Adapter de
 
 ## Release runbook
 
-Before the first release, configure a PyPI Trusted Publisher for this repository, `release.yml`, and the `pypi` environment. In GitHub, restrict the environment to `v*` tags and require maintainer approval. The release workflow checks the tag against the package version, builds the source distribution and wheel, and publishes both with attestations after approval. The final job installs that wheel with the Docker extra from PyPI and runs a Docker smoke test. [PyPI Trusted Publishing setup](https://docs.pypi.org/trusted-publishers/adding-a-publisher/)
+Before tagging v0.1.0, check the [launch criteria](docs/design.md#success-criteria) for Docker, E2B, and Daytona and confirm `Docker conformance` is required and passing on `main`.
+
+Before the first release, configure a PyPI Trusted Publisher for this repository, `release.yml`, and the `pypi` environment. In GitHub, restrict the environment to `v*` tags and require maintainer approval. The release workflow checks the tag against the package version, builds the source distribution and wheel, and publishes both with attestations after approval. The final job installs that wheel with the Docker extra from PyPI and runs a Docker smoke test. [PyPI pending publisher setup](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/)
 
 Use the smoke job's result to decide what to do:
 
