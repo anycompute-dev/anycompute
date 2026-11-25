@@ -1,20 +1,34 @@
 # anycompute
 
-Run short, stateless sandbox jobs the same way on any sandbox provider.
+Python SDK and CLI for short-lived sandbox jobs on Docker, E2B, and Daytona.
 
-anycompute is an open-source Python SDK and CLI. One call or one command runs a job in a sandbox, reads back the output files and deletes the sandbox, with the same API on every supported provider and on local docker. You use your own provider accounts and keys: there is no hosted service, no account with anycompute and no telemetry.
+Run a command, collect its output and files, and handle sandbox cleanup through one interface. Use your own provider accounts and keys. anycompute has no hosted service or telemetry.
 
-## Status
+[Install from PyPI](https://pypi.org/project/anycompute/) · [Python API](https://github.com/anycompute-dev/anycompute/blob/v0.1.0/docs/design.md#python-api) · [CLI reference](https://github.com/anycompute-dev/anycompute/blob/v0.1.0/docs/design.md#cli)
 
-v0.1 supports Docker, E2B, and Daytona. Modal and Boat are available as preview adapters and still await project live conformance. The `all` extra includes both previews. See the [v0.1 design](docs/design.md) and [deferred work](TODOS.md).
+## Migrate with a coding agent
 
-The CLI has `run`, `verify`, `gc`, and `providers`. The Docker conformance suite uses a local Linux container daemon. The cloud adapters have keyless tests. E2B and Daytona each passed all five conformance tests in manual CI runs, including lifetime and deletion after client termination. Weekly cloud conformance remains disabled. [E2B run](https://github.com/anycompute-dev/anycompute/actions/runs/45395187713) · [Daytona run](https://github.com/anycompute-dev/anycompute/actions/runs/45441305818)
+Open your coding agent in the repository you want to migrate. Open the [migration prompt](https://github.com/anycompute-dev/anycompute/blob/main/docs/migrate-with-a-coding-agent.md), click **Copy raw file**, then paste it into the agent.
 
-Download the versioned JSON report from a workflow run's artifacts. Each report contains one provider's check outcomes and available lifecycle timings. [Docker CI](https://github.com/anycompute-dev/anycompute/actions/workflows/ci.yml?query=branch%3Amain) · [Cloud conformance](https://github.com/anycompute-dev/anycompute/actions/workflows/conformance.yml)
+## Quickstart
 
-See [TESTING.md](TESTING.md) for keyless checks and [CLAUDE.md](CLAUDE.md) for repository rules.
+Start a Linux-container Docker daemon and activate a Python 3.11+ virtual environment. Docker containers share the host kernel, so use this adapter for workloads you trust.
 
-The Python API supports only the names in `anycompute.__all__`. For the CLI, a command's exit code can match an anycompute error code. Scripts should use `--json` and check the `error` field to tell them apart.
+```sh
+python -m pip install 'anycompute[docker]'
+anycompute run --provider docker -- printf 'hello\n'
+```
+
+Run the same job in Python with `run`.
+
+```python
+from anycompute import run
+
+result = run(["printf", "hello\n"], provider="docker")
+print(result.stdout, end="")
+```
+
+For CLI scripts, use `--json` and check `error` and `exit_code` separately. The supported Python API is listed in `anycompute.__all__`.
 
 ## Providers
 
@@ -26,58 +40,21 @@ The Python API supports only the names in `anycompute.__all__`. For the CLI, a c
 | `modal` | Preview | gVisor container | Modal SDK credentials | Hard, up to 24 hours. The SDK may retry creates and execs. |
 | `boat` | Preview | Virtual machine | `BOAT_API_KEY` | Partial. The VM stops at its TTL and retains a disk snapshot until cleanup. |
 
-Use Docker only for workloads you trust. A container is not a boundary for untrusted code. Start a local Docker daemon. With the package installed using the `docker` extra, run `anycompute run --provider docker -- printf 'hello\n'`. From a source checkout, run:
+For E2B or Daytona, install the corresponding extra (`anycompute[e2b]` or `anycompute[daytona]`), configure that provider's credentials, and select it explicitly. The `all` extra also installs the Modal and Boat previews.
 
-```sh
-uv run --locked --extra docker anycompute run --provider docker -- printf 'hello\n'
-```
-
-The adapter uses a pinned image that contains `sleep`. It pulls the image before create if the daemon does not have it. If a client stops before the container starts, use `anycompute gc --provider docker --all --dry-run` to check for expired leftovers.
-
-## Migrate with a coding agent
-
-Open the repository you want to migrate in your coding agent and copy this prompt.
-
-```text
-Migrate this repository's provider-agnostic sandbox SDK to anycompute 0.1.0.
-Make the code changes and run the relevant tests.
-
-Use the released API and CLI as the reference.
-https://pypi.org/project/anycompute/0.1.0/
-https://github.com/anycompute-dev/anycompute/blob/v0.1.0/docs/design.md#python-api
-https://github.com/anycompute-dev/anycompute/blob/v0.1.0/docs/design.md#cli
-
-1. Find the existing dependency, sandbox call sites, provider selection, and
-   tests. Inventory the command, file, timeout, and cleanup behavior callers
-   depend on. Check that the project can use Python 3.11+ or call the anycompute
-   CLI. Migrate short-lived jobs with equivalent behavior. Keep the old path
-   where persistent sessions, mounts, streaming, or provider features lack a
-   safe equivalent, and report those gaps.
-2. Use the repository's package manager to add the relevant anycompute extras
-   (docker, e2b, or daytona) and update its lockfile. Preserve provider routing,
-   isolation requirements, and how credentials are supplied. Pass the provider
-   explicitly and keep credential values out of code, fixtures, and logs.
-3. For a single job, use anycompute.run(argv, provider=..., ttl=..., files=...,
-   read=...). For several commands in one sandbox, use a context-managed
-   anycompute.Sandbox and its write, exec, and read methods. Preserve argument
-   boundaries and intentional shell use. In Python, use relative sandbox paths
-   under /tmp/anycompute and pass file contents as bytes. Check provider TTL
-   limits and rounding. The TTL covers the sandbox lifetime, so preserve any
-   separate command deadline the application relies on.
-4. Preserve the caller's output shape, missing-file handling, exit status,
-   and error handling. Treat a nonzero workload exit as a result. Handle
-   provider and cleanup errors separately, keep the run ID for cleanup, and
-   avoid replaying work when a sandbox may still exist. If migrating a CLI
-   caller, use --json and inspect error and exit_code separately.
-5. Run relevant tests with fakes or trusted workloads on local Docker. Ask
-   before allocating cloud sandboxes. Remove the old dependency only after
-   all its callers are migrated. Report what changed, which tests passed,
-   and which paths still need the old SDK.
-```
+The Docker adapter pulls its pinned image if the daemon does not have it. If a client stops before the container starts, use `anycompute gc --provider docker --all --dry-run` to check for expired leftovers.
 
 ## Compare providers
 
 Use `anycompute verify task.toml --providers docker,e2b` to compare one task across two or more providers you have configured. Add `--json` for a machine-readable report. Add `--lifecycle` to check whether each provider ends and removes a separate sandbox after the client is killed. That check uses the provider's default options.
+
+## Status
+
+Docker conformance runs on GitHub CI. E2B and Daytona each passed all five conformance tests in manual runs, including lifetime and deletion after client termination. Modal and Boat await live conformance. Weekly cloud conformance remains disabled. [E2B run](https://github.com/anycompute-dev/anycompute/actions/runs/45395187713) · [Daytona run](https://github.com/anycompute-dev/anycompute/actions/runs/45441305818)
+
+Download the versioned JSON report from a workflow run's artifacts. Each report contains one provider's check outcomes and available lifecycle timings. [Docker CI](https://github.com/anycompute-dev/anycompute/actions/workflows/ci.yml?query=branch%3Amain) · [Cloud conformance](https://github.com/anycompute-dev/anycompute/actions/workflows/conformance.yml)
+
+Contributors can find keyless checks, the v0.1 design, and deferred work in the project docs. [Testing](TESTING.md) · [Design](docs/design.md) · [Deferred work](TODOS.md) · [Repository rules](CLAUDE.md)
 
 ## What your provider can see
 
