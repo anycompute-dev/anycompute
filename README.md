@@ -34,6 +34,47 @@ uv run --locked --extra docker anycompute run --provider docker -- printf 'hello
 
 The adapter uses a pinned image that contains `sleep`. It pulls the image before create if the daemon does not have it. If a client stops before the container starts, use `anycompute gc --provider docker --all --dry-run` to check for expired leftovers.
 
+## Migrate with a coding agent
+
+Open the repository you want to migrate in your coding agent and copy this prompt.
+
+```text
+Migrate this repository's provider-agnostic sandbox SDK to anycompute 0.1.0.
+Make the code changes and run the relevant tests.
+
+Use the released API and CLI as the reference.
+https://pypi.org/project/anycompute/0.1.0/
+https://github.com/anycompute-dev/anycompute/blob/v0.1.0/docs/design.md#python-api
+https://github.com/anycompute-dev/anycompute/blob/v0.1.0/docs/design.md#cli
+
+1. Find the existing dependency, sandbox call sites, provider selection, and
+   tests. Inventory the command, file, timeout, and cleanup behavior callers
+   depend on. Check that the project can use Python 3.11+ or call the anycompute
+   CLI. Migrate short-lived jobs with equivalent behavior. Keep the old path
+   where persistent sessions, mounts, streaming, or provider features lack a
+   safe equivalent, and report those gaps.
+2. Use the repository's package manager to add the relevant anycompute extras
+   (docker, e2b, or daytona) and update its lockfile. Preserve provider routing,
+   isolation requirements, and how credentials are supplied. Pass the provider
+   explicitly and keep credential values out of code, fixtures, and logs.
+3. For a single job, use anycompute.run(argv, provider=..., ttl=..., files=...,
+   read=...). For several commands in one sandbox, use a context-managed
+   anycompute.Sandbox and its write, exec, and read methods. Preserve argument
+   boundaries and intentional shell use. In Python, use relative sandbox paths
+   under /tmp/anycompute and pass file contents as bytes. Check provider TTL
+   limits and rounding. The TTL covers the sandbox lifetime, so preserve any
+   separate command deadline the application relies on.
+4. Preserve the caller's output shape, missing-file handling, exit status,
+   and error handling. Treat a nonzero workload exit as a result. Handle
+   provider and cleanup errors separately, keep the run ID for cleanup, and
+   avoid replaying work when a sandbox may still exist. If migrating a CLI
+   caller, use --json and inspect error and exit_code separately.
+5. Run relevant tests with fakes or trusted workloads on local Docker. Ask
+   before allocating cloud sandboxes. Remove the old dependency only after
+   all its callers are migrated. Report what changed, which tests passed,
+   and which paths still need the old SDK.
+```
+
 ## Compare providers
 
 Use `anycompute verify task.toml --providers docker,e2b` to compare one task across two or more providers you have configured. Add `--json` for a machine-readable report. Add `--lifecycle` to check whether each provider ends and removes a separate sandbox after the client is killed. That check uses the provider's default options.
