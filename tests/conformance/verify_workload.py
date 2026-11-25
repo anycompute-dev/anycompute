@@ -39,6 +39,8 @@ def _verification(env):
     if run_id != env.get("GITHUB_RUN_ID"):
         raise ConformanceFailure("Verify run ID did not match the current GitHub run")
     specs = [select_provider({**env, "ANYCOMPUTE_CONFORMANCE_PROVIDER": name}) for name in VERIFY_ADAPTERS]
+    if any(not spec.caps.live_run for spec in specs):
+        raise ConformanceFailure("Verify requires both adapters enabled for live conformance")
     if not all(env.get(name) for name in ("MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET", "BOAT_API_KEY")):
         raise ConformanceFailure("Verify requires both providers' conformance credentials")
     with _TASK.open("rb") as file:

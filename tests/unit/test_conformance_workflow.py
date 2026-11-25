@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timezone
 import http.client
 import json
@@ -98,6 +99,15 @@ def main(env):
     return run_gate(env, now=NOW)
 
 
+@pytest.fixture
+def trial_gate(gate, monkeypatch):
+    monkeypatch.setattr(providers, "PROVIDERS", tuple(
+        replace(spec, caps=replace(spec.caps, live_run=False)) if spec.name in ("modal", "boat") else spec
+        for spec in providers.PROVIDERS
+    ))
+    return gate
+
+
 def test_dispatch_passes_same_named_month_to_history_and_outputs_counted_attempt(gate, history):
     env, output = gate
     replies, requests = history
@@ -116,9 +126,10 @@ def test_dispatch_passes_same_named_month_to_history_and_outputs_counted_attempt
 @pytest.mark.parametrize("enabled, expected", [(("docker", "boat", "modal"), '["boat","modal"]'), (("docker",), "[]")])
 def test_weekly_matrix_uses_only_live_cloud_caps(gate, history, monkeypatch, capsys, enabled, expected):
     env, output = gate
-    env.update(GITHUB_EVENT_NAME="schedule", REQUESTED_ADAPTERS="")
+    env.update(GITHUB_EVENT_NAME="schedule", REQUESTED_ADAPTERS="",
+               ANYCOMPUTE_MODAL_TRIAL_MONTH="2026-11", ANYCOMPUTE_BOAT_TRIAL_MONTH="2026-11")
     monkeypatch.setattr(providers, "PROVIDERS", tuple(
-        spec for spec in providers.PROVIDERS if spec.name in enabled or not spec.caps.live_run
+        replace(spec, caps=replace(spec.caps, live_run=spec.name in enabled)) for spec in providers.PROVIDERS
     ))
     history[0].append(Reply(run(event="schedule", title="Weekly conformance")))
 
@@ -152,6 +163,56 @@ def test_manual_e2b_counts_only_named_dispatches(gate, history, capsys):
     history[0].append(Reply(weekly, run(2, attempt=3, title="adapters=e2b"), trial))
     assert main(env) == 1
     assert "e2b: 5 extra runs exceed 4" in capsys.readouterr().err
+    assert not output.exists()
+
+
+@pytest.mark.parametrize(("provider", "other"), [("modal", "boat"), ("boat", "modal")])
+def test_approved_trial_allows_one_dispatch_per_provider(trial_gate, history, provider, other):
+    env, output = trial_gate
+    env.update(REQUESTED_ADAPTERS=provider, GITHUB_RUN_ATTEMPT="1")
+    env[f"ANYCOMPUTE_{provider.upper()}_TRIAL_MONTH"] = "2026-11"
+    history[0].append(Reply(
+        run(1, event="schedule", title="Weekly conformance"),
+        run(2, attempt=1, title=f"adapters={other}"),
+        run(attempt=1, title=f"adapters={provider}"),
+    ))
+
+    assert main(env) == 0
+    assert output.read_text() == f'verified_attempt=1\nadapters=["{provider}"]\n'
+
+
+@pytest.mark.parametrize(("provider", "approval"), [("modal", None), ("boat", "2026-10"), ("modal", "2026-11\n")])
+def test_trial_requires_its_own_current_month_approval(trial_gate, history, capsys, provider, approval):
+    env, output = trial_gate
+    env.update(REQUESTED_ADAPTERS=provider, GITHUB_RUN_ATTEMPT="1",
+               ANYCOMPUTE_MODAL_TRIAL_MONTH="2026-11", ANYCOMPUTE_BOAT_TRIAL_MONTH="2026-11")
+    variable = f"ANYCOMPUTE_{provider.upper()}_TRIAL_MONTH"
+    if approval is None:
+        del env[variable]
+    else:
+        env[variable] = approval
+
+    assert main(env) == 1
+    assert f"{provider}: trial has no approval for this UTC month" in capsys.readouterr().err
+    assert not history[1] and not output.exists()
+
+
+@pytest.mark.parametrize(("adapters", "attempt", "prior", "message"), [
+    ("modal", 2, None, "one first attempt"),
+    ("boat", 1, "adapters=boat", "one first attempt"),
+    ("modal,boat", 1, None, "must name one provider"),
+    ("boat,e2b", 1, None, "must name one provider"),
+])
+def test_approved_trial_refuses_reruns_extra_runs_and_mixed_dispatches(trial_gate, history, capsys,
+                                                                      adapters, attempt, prior, message):
+    env, output = trial_gate
+    env.update(REQUESTED_ADAPTERS=adapters, GITHUB_RUN_ATTEMPT=str(attempt),
+               ANYCOMPUTE_MODAL_TRIAL_MONTH="2026-11", ANYCOMPUTE_BOAT_TRIAL_MONTH="2026-11")
+    attempts = [run(1, attempt=1, title=prior)] if prior else []
+    history[0].append(Reply(*attempts, run(attempt=attempt, title=f"adapters={adapters}")))
+
+    assert main(env) == 1
+    assert message in capsys.readouterr().err
     assert not output.exists()
 
 
@@ -337,6 +398,10 @@ def test_workflow_keeps_the_history_gate_keyless_and_passes_only_its_matrix():
     assert "adapters: ${{ steps.history.outputs.adapters }}" in limit
     assert "verified_attempt: ${{ steps.history.outputs.verified_attempt }}" in limit
     assert "REQUESTED_ADAPTERS: ${{ inputs.adapters }}" in limit
+    for provider in ("MODAL", "BOAT"):
+        variable = f"ANYCOMPUTE_{provider}_TRIAL_MONTH"
+        assert variable + ": ${{ vars." + variable + " }}" in limit
+        assert variable not in cloud
     assert "uv run --locked python -m tests.conformance.check_run_limit" in limit
     assert limit.count("inputs.") == 2 and "inputs." not in cloud
     assert "needs: limit" in cloud and "environment: conformance" in cloud
@@ -489,6 +554,16 @@ def test_verify_dispatch_uses_the_same_counted_adapters(gate, history):
     history[0].append(Reply(run()))
     assert main(env) == 0
     assert output.read_text() == 'verified_attempt=2\nadapters=["modal","boat"]\nverify=true\n'
+
+
+def test_verify_stays_disabled_with_both_individual_trials_approved(trial_gate, history, capsys):
+    env, output = trial_gate
+    env.update(REQUESTED_VERIFY="1", GITHUB_RUN_ATTEMPT="1",
+               ANYCOMPUTE_MODAL_TRIAL_MONTH="2026-11", ANYCOMPUTE_BOAT_TRIAL_MONTH="2026-11")
+
+    assert main(env) == 1
+    assert "Verify requires both adapters enabled for live conformance" in capsys.readouterr().err
+    assert not history[1] and not output.exists()
 
 
 @pytest.mark.parametrize("provider", ["modal", "boat"])

@@ -59,6 +59,8 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           REQUESTED_ADAPTERS: ${{ inputs.adapters }}
           REQUESTED_VERIFY: ${{ inputs.verify && '1' || '0' }}
+          ANYCOMPUTE_MODAL_TRIAL_MONTH: ${{ vars.ANYCOMPUTE_MODAL_TRIAL_MONTH }}
+          ANYCOMPUTE_BOAT_TRIAL_MONTH: ${{ vars.ANYCOMPUTE_BOAT_TRIAL_MONTH }}
         run: uv run --locked python -m tests.conformance.check_run_limit
 
   cloud:

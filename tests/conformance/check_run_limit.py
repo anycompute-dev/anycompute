@@ -12,7 +12,9 @@ import sys
 from urllib.parse import urlencode
 
 from anycompute import providers
-from tests.conformance.runner import MANUAL_TRIAL_ADAPTERS, VERIFY_ADAPTERS, RunLimitError, check_run_limit
+from tests.conformance.runner import (
+    APPROVAL_REQUIRED_TRIALS, MANUAL_TRIAL_ADAPTERS, VERIFY_ADAPTERS, RunLimitError, check_run_limit,
+)
 
 _MAX_PAGE_BYTES = 8 * 1024 * 1024
 
@@ -79,6 +81,17 @@ def main(env: Mapping[str, str] = os.environ, *, now: datetime | None = None) ->
             event != "workflow_dispatch" or tuple(selected) != VERIFY_ADAPTERS
         ):
             raise RunLimitError("Verify requires a manual dispatch naming modal,boat in that order")
+        if verify == "1" and not live.issuperset(selected):
+            raise RunLimitError("Verify requires both adapters enabled for live conformance")
+
+        when = now or datetime.now(timezone.utc)
+        if set(selected) & (APPROVAL_REQUIRED_TRIALS - live):
+            if len(selected) != 1:
+                raise RunLimitError("A Modal or Boat trial must name one provider")
+            adapter = selected[0]
+            month = when.astimezone(timezone.utc).strftime("%Y-%m")
+            if env.get(f"ANYCOMPUTE_{adapter.upper()}_TRIAL_MONTH") != month:
+                raise RunLimitError(f"{adapter}: trial has no approval for this UTC month")
 
         pages: list[bytes] = []
 
@@ -89,7 +102,7 @@ def main(env: Mapping[str, str] = os.environ, *, now: datetime | None = None) ->
 
         counted = check_run_limit(
             fetch_page, current_run_id=current_run_id, current_attempt=int(attempt),
-            now=now or datetime.now(timezone.utc), live_adapters=live,
+            now=when, live_adapters=live,
         )
         # Bind the matrix to the dispatch that the runner actually counted.
         current = None

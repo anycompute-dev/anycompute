@@ -25,7 +25,8 @@ MAX_TTL_S = 120
 _PROJECT_CREATE_ATTEMPTS = {"modal": 4, "daytona": 1}
 _MODAL_MAX_CREATES = 7  # Stay below the previous 30-allocation ceiling.
 VERIFY_ADAPTERS = ("modal", "boat")
-MANUAL_TRIAL_ADAPTERS = frozenset({"e2b", "daytona"})
+APPROVAL_REQUIRED_TRIALS = frozenset({"modal", "boat"})
+MANUAL_TRIAL_ADAPTERS = frozenset({"e2b", "daytona"}) | APPROVAL_REQUIRED_TRIALS
 _DAYTONA_TRIAL_MONTH = (2026, 11)
 _DAYTONA_ORIGINAL_TRIAL_ID = 45435204082
 GRACE_S = engine._GRACE_S
@@ -252,6 +253,10 @@ def check_run_limit(
     if current is None:
         raise RunLimitError("Current run not found in this UTC month's GitHub history")
     for adapter in sorted(current):
+        if adapter in APPROVAL_REQUIRED_TRIALS and adapter not in live:
+            if current != {adapter} or current_attempt != 1 or counts[adapter] != 1:
+                raise RunLimitError(f"{adapter}: the trial allows one first attempt naming only {adapter}")
+            continue
         if adapter == "daytona" and adapter not in live:
             if (month.year, month.month) != _DAYTONA_TRIAL_MONTH:
                 raise RunLimitError("The Daytona verification is limited to November 2026 UTC")
