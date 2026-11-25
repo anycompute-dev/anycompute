@@ -49,6 +49,10 @@ The manual **Modal account check** workflow on `main` uses the protected `confor
 
 The manual **Cloud account check** workflow on `main` uses the same protected environment to check Boat account allowances, E2B's `base` template size, and Daytona's snapshot and warm pools. Each job receives its own provider key and reports a small set of readiness fields. Before enabling live conformance, verify the spend controls in the design. [Spend rules](docs/design.md#spend-rules-for-the-conformance-runner)
 
+For a standalone Modal or Boat acceptance run, first confirm the relevant account and spend controls and get approval for the run. Modal needs the named image in the CI workspace and environment. Boat needs start eligibility and enough included VM time for the suite. Set the approved provider's repository Actions variable (`ANYCOMPUTE_MODAL_TRIAL_MONTH` or `ANYCOMPUTE_BOAT_TRIAL_MONTH`) to the current UTC month in `YYYY-MM` format. Then dispatch **Conformance** on `main` with only that provider in `adapters` and `verify=false`. The gate allows attempt one when it is the only named attempt for that provider that month. Rejected dispatches also count in GitHub history, so use fixtures for dry runs.
+
+Leave the variables unset while live runs are on hold. The weekly matrix still follows the adapters' separate weekly opt-ins. The fixed Modal and Boat comparison requires both weekly opt-ins.
+
 Daytona reports `feature unavailable` if its warm-pool list returns HTTP 404 after the snapshot check passes. This is the status Daytona documents for organizations with warm pools disabled. [Daytona troubleshooting](https://www.daytona.io/docs/en/troubleshooting/#provisioning)
 
 The E2B trial used **Conformance** on `main` with `adapters=e2b` and `verify=false`. The counted job checked the `base` resources before allocating and passed all five tests and cleanup. Weekly E2B conformance remains disabled. [E2B run](https://github.com/anycompute-dev/anycompute/actions/runs/45395187713)

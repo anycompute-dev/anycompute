@@ -81,16 +81,19 @@ def test_selects_only_opted_in_docker_or_counted_live_adapter(registry):
         select_provider(_OPTED_IN | {"GITHUB_RUN_ATTEMPT": "0", "ANYCOMPUTE_VERIFIED_ATTEMPT": "0"})
 
 
-@pytest.mark.parametrize(("provider", "position"), [("e2b", 3), ("daytona", 4)])
+@pytest.mark.parametrize(("provider", "position"), [("boat", 2), ("e2b", 3), ("daytona", 4)])
 def test_selects_trial_only_for_a_counted_manual_dispatch(registry, provider, position):
     from tests.conformance.runner import select_provider
 
-    env = _OPTED_IN | {"ANYCOMPUTE_CONFORMANCE_PROVIDER": provider, "GITHUB_EVENT_NAME": "workflow_dispatch"}
+    env = _OPTED_IN | {
+        "ANYCOMPUTE_CONFORMANCE_PROVIDER": provider, "GITHUB_EVENT_NAME": "workflow_dispatch",
+        "GITHUB_RUN_ATTEMPT": "1", "ANYCOMPUTE_VERIFIED_ATTEMPT": "1",
+    }
     assert select_provider(env) is registry[position]
     with pytest.raises(ValueError, match="not enabled"):
         select_provider(env | {"GITHUB_EVENT_NAME": "schedule"})
     with pytest.raises(ValueError, match="attempt"):
-        select_provider(env | {"ANYCOMPUTE_VERIFIED_ATTEMPT": "1"})
+        select_provider(env | {"ANYCOMPUTE_VERIFIED_ATTEMPT": "2"})
 
 
 def test_fixture_run_id_uses_exact_env_or_one_generated_id(registry, monkeypatch):

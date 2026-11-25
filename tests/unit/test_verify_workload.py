@@ -112,11 +112,14 @@ def test_verify_refuses_before_any_calls_without_exact_counted_context(context, 
     assert transport.events == []
 
 
-def test_disabled_adapter_refuses_without_sweeping_either_provider(context, monkeypatch):
+@pytest.mark.parametrize("disabled", [("boat",), ("modal", "boat")])
+def test_trial_adapters_cannot_enter_paired_verification(context, monkeypatch, disabled):
     env, transport = context
-    modal, boat = providers.PROVIDERS
-    monkeypatch.setattr(providers, "PROVIDERS", (modal, replace(boat, caps=replace(boat.caps, live_run=False))))
-    with pytest.raises(ValueError, match="not enabled"):
+    monkeypatch.setattr(providers, "PROVIDERS", tuple(
+        replace(spec, caps=replace(spec.caps, live_run=False)) if spec.name in disabled else spec
+        for spec in providers.PROVIDERS
+    ))
+    with pytest.raises(runner.ConformanceFailure, match="both adapters enabled"):
         verify_workload._verification(env)
     assert transport.events == []
 
