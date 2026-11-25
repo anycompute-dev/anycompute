@@ -10,6 +10,8 @@ Run a command, collect its output and files, and handle sandbox cleanup through 
 
 Open your coding agent in the repository you want to migrate. Open the [migration prompt](https://github.com/anycompute-dev/anycompute/blob/main/docs/migrate-with-a-coding-agent.md), click **Copy raw file**, then paste it into the agent.
 
+For a server-side tool that runs a trusted Python job, see the [CopilotKit example](https://github.com/anycompute-dev/anycompute/blob/main/docs/copilotkit.md).
+
 ## Quickstart
 
 Start a Linux-container Docker daemon and activate a Python 3.11+ virtual environment. Docker containers share the host kernel, so use this adapter for workloads you trust.
