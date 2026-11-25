@@ -108,7 +108,8 @@ class _Modal:
 
         def resolve(sdk):
             _check_conformance(sdk, options)
-            image = sdk.Image.from_name(_CONFORMANCE_IMAGE).hydrate()
+            # Sandbox.create resolves this published image reference.
+            image = sdk.Image.from_name(_CONFORMANCE_IMAGE)
             return _lookup_app(sdk), image
 
         self._prepared = None

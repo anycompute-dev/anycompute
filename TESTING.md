@@ -51,9 +51,9 @@ The manual **Cloud account check** workflow on `main` uses the same protected en
 
 Daytona reports `feature unavailable` if its warm-pool list returns HTTP 404 after the snapshot check passes. This is the status Daytona documents for organizations with warm pools disabled. [Daytona troubleshooting](https://www.daytona.io/docs/en/troubleshooting/#provisioning)
 
-For the initial E2B conformance trial, dispatch **Conformance** on `main` with `adapters=e2b` and `verify=false`. The counted job checks the current `base` resources before launching. Weekly E2B runs require a separate opt-in through the provider capability.
+The E2B trial used **Conformance** on `main` with `adapters=e2b` and `verify=false`. The counted job checked the `base` resources before allocating and passed all five tests and cleanup. Weekly E2B conformance remains disabled. [E2B run](https://github.com/anycompute-dev/anycompute/actions/runs/45395187713)
 
-The authorized Daytona verification uses **Conformance** on `main` with `adapters=daytona` and `verify=false`. CI requires the original trial and accepts one fresh Daytona-only dispatch during November 2026 UTC. The job checks the snapshot, warm pools, and key permissions before it allocates. Weekly Daytona conformance requires a separate opt-in.
+The authorized Daytona verification used **Conformance** on `main` with `adapters=daytona` and `verify=false`. It checked the snapshot, warm pools, and key permissions before allocating. All five tests and cleanup passed, including exit `123` in the lifetime test and deletion after client termination. The allowed verification dispatch has been used. Weekly Daytona conformance remains disabled pending a verified billing cutoff or spend cap. [Daytona run](https://github.com/anycompute-dev/anycompute/actions/runs/45441305818)
 
 The protected `Conformance` workflow can compare one fixed workload on Modal and boat.dev. Set `adapters` to `modal,boat` and enable `verify` on a manual main-branch dispatch after both adapters are enabled and their credentials are configured. The comparison job records its JSON report in the step log.
 

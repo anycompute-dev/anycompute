@@ -57,20 +57,20 @@ def test_create_uses_provider_ttl_and_tags_on_request_and_reuses_app(sdk):
 def test_conformance_prepares_named_image_and_caps_resources(sdk, monkeypatch):
     monkeypatch.setenv("ANYCOMPUTE_CONFORMANCE_LIVE", "1")
     sdk.config.config["max_throttle_wait"] = 0
+    image = object()
+    sdk.Image.from_name.return_value = image
     adapter = modal._Modal()
     adapter.prepare(options={}, timeout_s=210)
-    resolved = sdk.Image.from_name.return_value.hydrate
     sdk.Image.from_name.assert_called_once_with("anycompute-conformance:v1")
-    resolved.assert_called_once_with()
     sdk.App.lookup.assert_called_once_with("anycompute", create_if_missing=True)
     sdk.Sandbox.create.assert_not_called()
 
     assert adapter.create(ttl=90, labels=LABELS, options={}, timeout_s=210) == "sb-one"
     sdk.Sandbox.create.assert_called_once_with(
         "sleep", "infinity", app=sdk.App.lookup.return_value, tags=LABELS, timeout=90, runtime="gvisor",
-        image=resolved.return_value, cpu=(0.125, 1), memory=(128, 512), block_network=True,
+        image=image, cpu=(0.125, 1), memory=(128, 512), block_network=True,
     )
-    assert sdk.Image.from_name.call_count == resolved.call_count == sdk.App.lookup.call_count == 1
+    assert sdk.Image.from_name.call_count == sdk.App.lookup.call_count == 1
     sdk.Image.from_registry.assert_not_called()
 
 
@@ -80,13 +80,13 @@ def test_conformance_create_requires_successful_preparation(sdk, monkeypatch):
     adapter = modal._Modal()
     with pytest.raises(ConfigError, match="prepared image and app"):
         adapter.create(ttl=90, labels=LABELS, options={}, timeout_s=210)
-    sdk.Image.from_name.return_value.hydrate.side_effect = sdk.exception.NotFoundError("private response")
+    sdk.App.lookup.side_effect = sdk.exception.NotFoundError("private response")
     with pytest.raises(ProviderError, match="prepare conformance image and app") as error:
         adapter.prepare(options={}, timeout_s=210)
     assert not error.value.sandbox_may_exist and "private response" not in str(error.value)
     with pytest.raises(ConfigError, match="prepared image and app"):
         adapter.create(ttl=90, labels=LABELS, options={}, timeout_s=210)
-    sdk.App.lookup.assert_not_called()
+    sdk.App.lookup.assert_called_once_with("anycompute", create_if_missing=True)
     sdk.Sandbox.create.assert_not_called()
 
 

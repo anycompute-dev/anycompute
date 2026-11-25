@@ -165,7 +165,7 @@ Each adapter declares these caps:
 |---|---|---|
 | `ttl_unit_s`, `ttl_max_s` | int; int or None (no maximum) | The provider's lifetime granularity and limit, in seconds |
 | `labels_at_create` | bool | Whether labels go in the create request |
-| `lifetime` | `"hard"` or `"partial"` | `hard` when the provider ends the sandbox at its TTL; `partial` when it only stops it (boat.dev), or until the suite shows a delete at the TTL (Daytona; see Declared gaps) |
+| `lifetime` | `"hard"` or `"partial"` | `hard` when the provider ends the sandbox at its TTL; `partial` when it only stops it (boat.dev) |
 | `pre_start_window` | `"none"` or `"partial"` | An untimed window before the lifetime starts |
 | `create_retry`, `exec_retry` | `"off"` or `"partial"` | `off` when the adapter turns off every SDK and transport retry for that call (rule 10); `partial` when it cannot |
 | `creates_per_minute` | a number with its source URL and checked date, or None | Its documented creates per minute |
@@ -516,7 +516,6 @@ Unit tests (one set on the fake for both callers, plus the live docker run):
 
 Declared gaps:
 
-- **Daytona lifetime** is `partial` until the lifetime and kill-client tests show that Daytona deletes the sandbox at the TTL (`ttl_minutes`; see the Daytona adapter). Then it becomes `hard`.
 - **boat.dev lifetime** is `partial`: its TTL stops the VM and keeps the disk. For a `partial` lifetime, the kill-client and lifetime tests pass when the VM is stopped within the TTL plus the maximum grace period; the suite's gc then deletes it and verifies the delete. The docs tell users that a killed client on boat.dev leaves a stopped VM and its disk until gc runs. boat.dev keeps a stopped disk free for at least 14 days (docs.boat.dev/billing, checked 2026-11-23).
 - **docker lifetime** is hard once the container starts. The window between create and start, where no timer runs, is declared in its own cap, `pre_start_window: partial`. So docker's lifetime, kill-client and Lifecycle checks still use the hard pass rule (with auto-remove, an ended container is gone), and a stopped container fails. gc deletes a container left in that window.
 - **Modal create and exec retries** are `partial`: its gRPC layer retries calls and has no public switch. Its list shows running sandboxes only and no create time, so `gc --all` keeps Modal sandboxes unless `--force`; its hard timeout ends them anyway.
@@ -718,7 +717,7 @@ Official `modal` Python SDK 1.x, starting at 1.6.4. See the [Sandbox API](https:
 - Its gRPC retries cannot be turned off, so `create_retry` and `exec_retry` are `partial`.
 - Its `key_sources` cover the SDK token and OAuth environment variables and the corresponding fields in every profile in the config file. The config file is the file at `MODAL_CONFIG_PATH` when it is set, else `~/.modal.toml`. A unit test checks that the engine redacts a key in a non-default profile of a `MODAL_CONFIG_PATH` file.
 - Its unit tests stub the SDK exceptions. The SDK uses `ResourceExhaustedError` for both quotas and rate limits, so the adapter maps an explicit quota or rate-limit message and reports other cases as `ProviderError`.
-- Project conformance uses SDK 1.6.4 with `MODAL_MAX_THROTTLE_WAIT=0`, removing its separate server-throttle retries. The initial submission plus three transient retries are reserved as four allocations, without relying on server deduplication. Project creates use the pre-published `anycompute-conformance:v1` image, default provider options, a TTL of at most 120 seconds, CPU capped at one physical core, memory capped at 512 MiB, and no guest networking. Resolve the image and app during preparation, before the engine starts its create worker. See [named images](https://modal.com/docs/guide/sandboxes#separating-image-builds-from-sandbox-creation), [resource limits](https://modal.com/docs/guide/sandbox-resources), and [region pricing](https://modal.com/docs/guide/region-selection#pricing). [Prepare the image locally](../TESTING.md#prepare-the-modal-image-locally) with the pinned Python base. Before live opt-in, publish the verified image in the conformance environment and verify the workspace billing controls in [Spend rules](#spend-rules-for-the-conformance-runner).
+- Project conformance uses SDK 1.6.4 with `MODAL_MAX_THROTTLE_WAIT=0`, removing its separate server-throttle retries. The initial submission plus three transient retries are reserved as four allocations, without relying on server deduplication. Project creates use the pre-published `anycompute-conformance:v1` image, default provider options, a TTL of at most 120 seconds, CPU capped at one physical core, memory capped at 512 MiB, and no guest networking. During preparation, look up the app and construct the image reference. `Sandbox.create` resolves the reference to the published image before submitting the sandbox request. See [named images](https://modal.com/docs/guide/named-images#starting-sandboxes-using-named-images), [resource limits](https://modal.com/docs/guide/sandbox-resources), and [region pricing](https://modal.com/docs/guide/region-selection#pricing). [Prepare the image locally](../TESTING.md#prepare-the-modal-image-locally) with the pinned Python base. Before live opt-in, publish the verified image in the conformance environment and verify the workspace billing controls in [Spend rules](#spend-rules-for-the-conformance-runner).
 
 ### E2B
 
@@ -731,19 +730,19 @@ Official `e2b` Python SDK 2.64.0. See the [Python SDK source](https://github.com
 - The adapter explicitly selects kill on timeout. The lifetime and kill-client tests pass only when the sandbox is gone, not paused.
 - The adapter disables control-plane response retries. The SDK still retries failures before a request is sent, without replaying delivered requests. The adapter declares these transport retries in its capabilities.
 - Read-only observer attachment uses the pinned SDK's sandbox GET response. The public connect method can resume a paused sandbox. Commands use POSIX quoting and the SDK's separate output streams.
-- Project live conformance is disabled pending initial validation through protected CI.
+- All five conformance tests and run-scoped cleanup passed in a protected manual CI run. Weekly conformance remains disabled. [E2B run](https://github.com/anycompute-dev/anycompute/actions/runs/45395187713)
 
 ### Daytona
 
 Official `daytona[v0-sdk]` Python SDK 2.1.0 through the `v0` namespace. See the [SDK reference](https://www.daytona.io/docs/en/python-sdk/) and [sandbox lifecycle guide](https://www.daytona.io/docs/en/sandboxes/).
 
 - TTL maps to `ttl_minutes` (whole minutes, so `ttl_unit_s` is 60). The Daytona SDK reference documents it as a wall-clock limit from creation: Daytona destroys the sandbox at that limit, even a stopped one (checked 2026-11-23). The adapter sets `auto_stop_interval` to the same minutes and creates the sandbox as ephemeral.
-- Its lifetime stays `partial` until the live lifetime and kill-client tests show a delete at the TTL (see Declared gaps).
+- The adapter declares a `hard` lifetime. In the protected manual verification, the lifetime and kill-client tests both observed the sandbox gone within the TTL plus the grace period. All five tests and run-scoped cleanup passed. [Daytona run](https://github.com/anycompute-dev/anycompute/actions/runs/45441305818)
 - Labels map to `labels`.
 - Delete submits the request with the remaining cleanup budget. The engine confirms independently.
 - The adapter uses the `daytona-small` snapshot by default. The `snapshot` and `environment` options may override the default workload setup.
 - V0 session exec returns separate stdout and stderr. Each command runs in a fresh POSIX shell in the requested working directory. The session lives only for the lifetime of its sandbox.
-- The v0 SDK does not expose a public retry switch. Normal SDK reconnect retries remain declared partial. Project creates use an isolated SDK control transport with POST retries and redirects disabled, the shared `us` target, blocked guest networking, and a TTL of 60 or 120 seconds. During preparation the adapter checks that the public `daytona-small` snapshot is active and matches the priced resources, then uses its ID for create. Before a trial or recurring run, verify that the project organization has no matching warm pool. A sandbox created from a warm pool can trigger a replacement allocation. Recurring runs also require a billing cutoff or provider-side usage cap. Protected CI still needs to validate lifecycle and snapshot metadata. [Billing states](https://www.daytona.io/docs/en/billing/) · [Warm pools](https://www.daytona.io/docs/en/warm-pools/)
+- The v0 SDK does not expose a public retry switch. Normal SDK reconnect retries remain declared partial. Project creates use an isolated SDK control transport with POST retries and redirects disabled, the shared `us` target, blocked guest networking, and a TTL of 60 or 120 seconds. During preparation the adapter checks that the public `daytona-small` snapshot is active and matches the priced resources, then uses its ID for create. The protected verification passed the snapshot, warm-pool, and key-permission checks. Future runs still need these checks because a sandbox created from a warm pool can trigger a replacement allocation. Weekly conformance remains disabled pending a verified billing cutoff or provider-side usage cap. [Billing states](https://www.daytona.io/docs/en/billing/) · [Warm pools](https://www.daytona.io/docs/en/warm-pools/)
 
 ### boat.dev
 
@@ -872,7 +871,7 @@ Version 0.1 is done when all of these are true:
 5. **Modal.** Write the Modal adapter and run the live conformance tests from Next Step 4 on it, driven through the CLI: the same suite, including the kill-client test with its marker.
 6. **boat.dev.** Add the boat.dev adapter with its declared `partial` rules and `ttl_max_s` 480.
 7. **verify.** Write `verify` and its report. Run the fixed workload once on Modal and boat.dev with `adapters=modal,boat` and `verify=true` in a manual dispatch of `conformance.yml`. The verify job replaces that dispatch's provider matrix and counts the attempt for both adapters. It reserves both creates before the comparison, sweeps both adapters, checks the workload and duplicate count against the report and provider inventory, and cleans up both adapters even after a failure.
-8. **E2B and Daytona live.** Add the E2B adapter (`ttl_max_s` 3600) and the Daytona adapter (`ttl_minutes`; `partial` until the live tests show a delete at the TTL). Run the live conformance suite on them, driven through the CLI as in Next Step 5.
+8. **E2B and Daytona live.** The E2B adapter (`ttl_max_s` 3600) and Daytona adapter (`ttl_minutes`) passed live conformance in protected manual CI runs. Both adapters declare hard lifetime.
 9. **Post-Modal features and branch protection.** After the Modal conformance run passes, set branch protection on main with the docker conformance job as a required check, and build these features. Add a CLI unit test for each of the copyable gc command line, the `RateLimitError` line and the verify summary line, and assertions on the report version fields, the API host in the runtime record and `Result.sandbox_seconds` in the `--json` and verify output.
    - the create pacer;
    - `provider_options` and `sb.native`;
